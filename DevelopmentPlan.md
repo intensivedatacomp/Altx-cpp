@@ -180,7 +180,7 @@ Altx-cpp/
 |-- benchmarks/                 # the synthetic dataset harness of development stage 3
 |-- docker/                     # dev-cpu, dev-gpu, run-{cpu,mpi,hip,mpi-omp}
 |-- docs/                       # Doxyfile.in, mainpage.md
-|-- scripts/                    # gen_reference.py, doc and version checks
+|-- scripts/                    # gen_reference.py, build_docker_images_locally.sh, checks
 |-- external/                   # argparse and HOP, fetched by CMake
 `-- .github/workflows/
 ```
@@ -427,9 +427,14 @@ docker/
 |-- base.Dockerfile       # ARG FLAVOR=cpu|gpu
 |-- dev.Dockerfile
 |-- runtime.Dockerfile    # multi-stage
-|-- vim/                  # init.lua, plugin list, clangd config
+|-- vim/                  # vimrc, pinned vim-plug list, clangd config
 `-- scripts/              # entrypoints, MPI wrapper
 ```
+
+The same images are built locally by `scripts/build_docker_images_locally.sh`, so that the CI
+workflow is a second consumer of the Dockerfiles rather than the only one. It builds the same
+three-layer chain in the same order, with the same build arguments, and can run a smoke check on
+each result -- catching "works in CI only" before it becomes a debugging session in Actions.
 
 Base images are pinned by **digest**, but individual apt package versions are not: Ubuntu drops
 old versions from the archive, so pinning them turns every base refresh into a maintenance task
@@ -599,8 +604,35 @@ Otherwise the first commit in a fresh container pays for every hook environment 
 The right mechanism is **clangd driven by `compile_commands.json`**, which CMake emits with
 `CMAKE_EXPORT_COMPILE_COMMANDS=ON`. Autocomplete and diagnostics for OpenMP, MPI, HDF5 and BLAS
 then work with no per-library configuration, because clangd sees the real include paths and
-defines of the actual build. Neovim with the built-in LSP client is the proposed editor
-configuration, shipped as `docker/vim/`.
+defines of the actual build. **Vim 9 with `vim-lsp` is the editor configuration**, shipped as
+`docker/vim/`.
+
+Neovim with its built-in LSP client would need no plugins at all, and was the earlier proposal.
+Vim is chosen instead for consistency with the
+[`docker-builder`](https://github.com/halmosb/docker-builder) images, which are already part of
+the daily workflow and already carry a `.vimrc` and vim-plug: one editor to configure and one set
+of habits, rather than two. The price is four plugins where Neovim needs zero --
+`prabirshrestha/{async.vim,vim-lsp,asyncomplete.vim,asyncomplete-lsp.vim}`, since `vim-lsp` alone
+supplies only an `omnifunc` and not an as-you-type completion popup. All four are **pinned by
+commit**, or the image stops being reproducible and the `hash-<content>` tag becomes a lie.
+`vim-lsp-settings` is deliberately *not* used: it downloads language servers at run time, which
+contradicts a pinned image where `clangd` comes from apt.
+
+Two details decide whether this works at all, and both are invisible until they fail:
+
+- **`--query-driver`.** `clangd` is clang, the build is GCC. Without
+  `--query-driver=/usr/bin/g++*,/usr/bin/gcc*` clangd guesses where `libstdc++` lives; when the
+  guess is wrong every line is red with `'bits/c++config.h' file not found`.
+- **A fallback for when there is no compile database.** `compile_commands.json` does not exist
+  until CMake has configured, so the image also ships `~/.config/clangd/config.yaml` adding
+  `-std=c++20 -fopenmp -I/usr/include/hdf5/serial`. Of the four CPU libraries only serial HDF5
+  needs an explicit include path -- OpenBLAS and LAPACKE resolve through
+  `/usr/include/x86_64-linux-gnu` and `/usr/include`, and `omp.h` comes with GCC behind
+  `-fopenmp`. These flags are additive and harmless once a real compile database takes over.
+
+Because six presets mean six build directories, the compile database is selected explicitly by a
+committed repo-root `.clangd` (`CompilationDatabase: build/cpu-omp-debug`) rather than by a
+symlink that whichever `cmake --preset` ran last happens to win.
 
 The one thing that needs deliberate handling: **clangd does not understand `hipcc`.** Entries for
 `.hip` files must either be rewritten to `clang` with the HIP flags, or clangd must be given

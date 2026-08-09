@@ -1,0 +1,27 @@
+" Must come first. `vim -u {file}` starts in compatible mode, where a leading
+" backslash is not a line continuation but an E10 error -- which would silently
+" skip the lsp#register_server block below and leave clangd unregistered.
+set nocompatible
+
+call plug#begin('~/.vim/plugged')
+Plug 'prabirshrestha/async.vim',            { 'commit': '2082d13bb195f3203d41a308b89417426a7deca1' }
+Plug 'prabirshrestha/vim-lsp',              { 'commit': '2b1545846f136949576aa2b8d73b80bebad91041' }
+Plug 'prabirshrestha/asyncomplete.vim',     { 'commit': '17b654a87a834d4e835fb7467e562b4421ad9310' }
+Plug 'prabirshrestha/asyncomplete-lsp.vim', { 'commit': 'da23f4418a6301feac7b99e1728fb79acb243d69' }
+call plug#end()
+
+if executable('clangd')
+  augroup lsp_clangd
+    autocmd!
+    autocmd User lsp_setup call lsp#register_server({
+      \ 'name': 'clangd',
+      \ 'cmd': {server_info->['clangd',
+      \     '--background-index',
+      \     '--clang-tidy',
+      \     '--completion-style=detailed',
+      \     '--header-insertion=iwyu',
+      \     '--query-driver=/usr/bin/g++*,/usr/bin/gcc*,/opt/rocm/bin/hipcc']},
+      \ 'allowlist': ['c', 'cpp', 'objc', 'objcpp', 'cuda'],
+      \ })
+  augroup END
+endif
