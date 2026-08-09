@@ -179,7 +179,7 @@ Altx-cpp/
 |-- tests/{unit,integration,fixtures}/
 |-- benchmarks/                 # the synthetic dataset harness of development stage 3
 |-- docker/                     # dev-cpu, dev-gpu, run-{cpu,mpi,hip,mpi-omp}
-|-- docs/                       # Doxyfile.in, mainpage.md
+|-- docs/                       # Doxyfile.in, mainpage.md, DevelopmentEnvironment.md
 |-- scripts/                    # gen_reference.py, build_docker_images_locally.sh, checks
 |-- external/                   # argparse and HOP, fetched by CMake
 `-- .github/workflows/
@@ -886,6 +886,17 @@ what makes the "every function and every argument is documented" rule of the
 [pre-commit section](#pre-commit) enforceable rather than aspirational. Note the
 `EXTRACT_ALL = NO` requirement documented there: with `EXTRACT_ALL = YES` the check silently
 enforces nothing.
+
+Prose documentation lives in `docs/` as Markdown carrying a Doxygen `@page` command, so it appears
+under "Related Pages" in the same HTML output as the API reference rather than as a second,
+separate site. `docs/DevelopmentEnvironment.md` (`@page development_environment`) is the first of
+these: the image matrix, the ways of running the containers, and the editor tooling. The Doxyfile
+must therefore list `docs/` in `INPUT` alongside `src/`, and set
+`USE_MDFILE_AS_MAINPAGE = docs/mainpage.md`.
+
+`README.md` deliberately carries only the one command that starts an interactive session, and
+links onwards. It is the file people skim; everything that would compete with that command for
+attention belongs on the page above.
 
 Vulnerability scanning follows `docker-builder`: Trivy with `scanners: vuln`, SARIF uploaded to
 the GitHub Security tab under a per-image category, `ignore-unfixed: true` and a `.trivyignore`.
