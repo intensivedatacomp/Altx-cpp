@@ -1545,8 +1545,8 @@ expected values can be written down independently of any implementation. It fits
 less well, where the oracle is another implementation rather than a known answer.
 
 ## Development stages
-0. (current) Planning the code structure and development process.
-1. Setting up development environment: creating first docker images with vim and VS Code where autocomplete is set-up.
+0. Planning the code structure and development process.
+1. (current) Setting up development environment: creating first docker images with vim and VS Code where autocomplete is set-up.
 2. Freezing the ALTX file schema and modifying the Python implementation to write it. This comes
    before the C++ algorithm, because it produces the fixtures that every later stage is tested
    against.
@@ -1567,3 +1567,134 @@ What each stage needs in the way of hardware, given that there is no cluster yet
 Because stage 6 is hardware-blocked and stage 5 is only half-verifiable, the order of 5 and 6 is
 not fixed; whichever hardware becomes available first should go first. The architecture makes this
 cheap, since the backend axis and the distribution axis are independent.
+
+## Stage 3 in detail: build order to a correct serial implementation
+
+The order below is chosen on two principles:
+
+1. **Never write code that cannot yet be run.** Every milestone ends with something executable and
+   a test that can fail.
+2. **Front-load the risk.** The numerically dangerous parts are written and validated *before*
+   anything depends on them, and before the infrastructure that would make debugging them slower.
+
+The second principle is why the algorithm comes **before** HDF5, which looks backwards at first
+glance: the fixtures are `.h5` files, so surely the reader must come first? No -- and the reason is
+worth stating, because it saves a great deal of time.
+
+> **The Python docstrings already contain exact expected values.** `ExtractMethods.excess_kurtosis`
+> of `[[[1.],[2.],[3.],[4.],[5.]]]` is documented as `-1.3`; `nth_moment` with `n=2` and `n=4` as
+> `2.0` and `6.8`; `extract(ones(5,20,2), [["mean", 0.5]])` as `[[1., 1.]]`; and `Altx` on a seeded
+> `torch.randn(6, 50)` yields `RLK == ((5,3,1),)`, `P.shape == (3, 276, 1)` and a documented
+> three-row feature matrix. These are a ready-made test suite for the entire numerical core,
+> usable **before a single line of HDF5 exists**. Transcribe them into GoogleTest fixtures.
+
+### Milestone 0 -- the toolchain runs
+
+| # | File | Proven by |
+| - | ---- | --------- |
+| 1 | `CMakeLists.txt` (minimal: project, C++20, options) | it configures |
+| 2 | `cmake/CompilerWarnings.cmake`, `cmake/Dependencies.cmake` (GoogleTest via FetchContent) | -- |
+| 3 | `CMakePresets.json` -- only `cpu-serial-debug` and `cpu-omp-release` for now | `cmake --preset` works |
+| 4 | `tests/CMakeLists.txt`, `tests/unit/test_smoke.cpp` | `ctest` reports one passing test |
+
+Add the remaining presets later, when there is something to build with them. Two are enough to
+prove the option axes are orthogonal.
+
+### Milestone 1 -- core value types
+
+Everything here is pure, header-mostly and testable in isolation.
+
+| # | File | Proven by |
+| - | ---- | --------- |
+| 5 | `src/core/Exceptions.hpp`, `src/core/Logger.hpp` | -- |
+| 6 | `src/core/Tensor.hpp` | `test_tensor.cpp`: row-major indexing, the `(m, l, n_laws)` layout, alignment, move semantics |
+| 7 | `src/core/RLK.hpp` | `test_rlk.cpp`: `(r-1) % (2l-2) == 0`, broadcasting of scalars against lists, every rejection the Python `__init__` performs |
+| 8 | `cmake/GitVersion.cmake`, `src/core/Version.hpp.in` | the hash changes when a commit is made without reconfiguring |
+| 9 | `src/core/Parameters.{hpp,cpp}` with `validate()` | `test_parameters.cpp` |
+| 10 | `src/io/DataSet.hpp` -- the in-memory value type only, **no HDF5** | -- |
+| 11 | `src/dist/Communicator.hpp`, `src/dist/SerialComm.hpp` | -- |
+
+Items 10 and 11 are worth their placement. Separating `DataSet` (a value type) from `AltxFile`
+(the HDF5 machinery) keeps the algorithm testable with hand-built data. And writing `SerialComm`
+now, rather than when MPI arrives, means every later component is built against the communicator
+interface from the start -- which is what makes the MPI version an addition rather than a rewrite.
+
+### Milestone 2 -- the numerical heart, still no I/O
+
+| # | File | Proven by |
+| - | ---- | --------- |
+| 12 | `src/backend/cpu/LinAlg.hpp` -- traits, `gemm`, `syev` for `float`/`double` | `test_linalg.cpp`: GEMM against hand-computed products, both scalar types |
+| 13 | `src/backend/cpu/SymEigenSolver.{hpp,cpp}` -- **LAPACK path first**, plus canonical sign and the near-degeneracy counter | `test_eigen.cpp`: analytically known matrices; the canonical sign is stable under input sign flips |
+| 14 | `src/backend/cpu/Jacobi.hpp` -- the hand-written solver | `test_eigen_differential.cpp`: Jacobi against LAPACK over random symmetric matrices |
+
+**LAPACK before Jacobi**, deliberately. The first comparison against Python should differ in as few
+respects as possible, and Python reaches LAPACK through `torch.linalg.eigh`. Introducing a
+hand-written eigensolver at the same time as everything else means a mismatch has two candidate
+causes. Once the pipeline agrees with Python using LAPACK, Jacobi is added and validated against a
+working reference -- which is exactly the differential test the plan already calls for.
+
+### Milestone 3 -- algorithm kernels, validated against the docstrings
+
+| # | File | Proven by |
+| - | ---- | --------- |
+| 15 | `src/algo/Embed.hpp` -- windowing and the strided embedding | `test_embed.cpp` against hand-computed windows |
+| 16 | `src/backend/Backend.hpp` -- the abstract seam | it compiles |
+| 17 | `CpuBackend::extractLaws` | `test_extract_laws.cpp`: law counts, the prefix-sum compaction, `P.shape == (3, 276, 1)` from the docstring |
+| 18 | `src/algo/FeatureExtractor` -- quantile plus `mean`, `var`, `excess_kurtosis`, `nth_moment`, `mean_all` | `test_extract_methods.cpp`, transcribed from the Python docstrings |
+| 19 | `CpuBackend::project` -- the row-blocked GEMM | `test_project.cpp` |
+
+At the end of this milestone the whole numerical core is verified and **nothing has been read from
+disk**.
+
+### Milestone 4 -- I/O
+
+| # | File | Proven by |
+| - | ---- | --------- |
+| 20 | `src/io/H5Wrapper.hpp` -- RAII over `hid_t`, so no handle is leaked on an exception path | `test_h5wrapper.cpp` |
+| 21 | `src/io/AltxFile` **read** -- optional groups, dtype conversion, the consistency checks | `test_altxfile_read.cpp` against a committed Python-written fixture |
+| 22 | `src/io/AltxFile` **write** | `test_altxfile_roundtrip.cpp`: write, read back, compare |
+| 23 | `src/io/CsvWriter` -- including the `_generate_header` column naming | `test_csv_writer.cpp` |
+| 24 | `src/io/CsvReader`, `src/io/ArffReader` | only if a real dataset needs them; otherwise defer |
+
+Read before write: the fixtures must be consumable before anything produced is worth checking. The
+RAII wrapper genuinely comes first -- retrofitting it after the reader exists means revisiting
+every error path.
+
+### Milestone 5 -- assembly
+
+| # | File | Proven by |
+| - | ---- | --------- |
+| 25 | `src/LawExtractor.{hpp,cpp}` | `test_pipeline.cpp`: in-process, fixture in, features out |
+| 26 | `src/Transformer.{hpp,cpp}` | as above |
+
+### Milestone 6 -- the CLI and the real exit criterion
+
+| # | File | Proven by |
+| - | ---- | --------- |
+| 27 | `apps/altx_main.cpp` -- `train`, `transform`, `run` | `--help` for each subcommand |
+| 28 | `tests/fixtures/` -- the committed `.h5` files from stage 2 | -- |
+| 29 | `tests/integration/test_cli_roundtrip.cpp` | **the definition of done** |
+
+**Stage 3 is complete when** `altx transform` reads a model trained by Python, transforms the same
+data, and produces features matching Python's within tolerance -- and the serial and OpenMP builds
+agree bitwise with each other.
+
+### Milestone 7 -- hardening
+
+Sanitizers clean on the full suite; the no-NaN validation paths exercised by deliberately malformed
+inputs; error messages checked for naming the offending instance, channel and index;
+`.pre-commit-config.yaml` and the CI workflows wired up.
+
+### A tolerance trap to expect at milestone 6
+
+The Python implementation works largely in **float32** -- `P` is allocated with the default dtype
+and `multiply_only` casts to `torch.float32` -- while the C++ default is `double`. The reference
+values therefore carry float32 rounding error, so agreement is bounded by roughly `1e-6` relative
+**regardless of how precise the C++ build is**. Setting the round-trip tolerance from the C++
+scalar type rather than from Python's will produce a failure that looks like a bug and is not.
+
+### Deliberately not written during stage 3
+
+`MpiComm`, `HipBackend`, the radix select and the two-pass histogram selection, and any blocking or
+vectorisation tuning beyond the row-blocked loop structure. Stage 3 establishes correctness;
+stage 4 measures, and only then is anything optimised.
