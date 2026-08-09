@@ -15,11 +15,43 @@ set shell=/bin/bash
 tnoremap <Esc><Esc> <C-\><C-n>
 
 call plug#begin('~/.vim/plugged')
+
+" Autocomplete
 Plug 'prabirshrestha/async.vim',            { 'commit': '2082d13bb195f3203d41a308b89417426a7deca1' }
 Plug 'prabirshrestha/vim-lsp',              { 'commit': '2b1545846f136949576aa2b8d73b80bebad91041' }
 Plug 'prabirshrestha/asyncomplete.vim',     { 'commit': '17b654a87a834d4e835fb7467e562b4421ad9310' }
 Plug 'prabirshrestha/asyncomplete-lsp.vim', { 'commit': 'da23f4418a6301feac7b99e1728fb79acb243d69' }
+
+" Vim
+Plug 'tpope/vim-fugitive',                  { 'commit': '3b753cf8c6a4dcde6edee8827d464ba9b8c4a6f0' }
+
 call plug#end()
+
+" ---------------------------------
+" General
+" ---------------------------------
+set tabstop=4
+set shiftwidth=4
+set expandtab          " Use spaces instead of tabs
+set hlsearch           " Highlight search results (Hide results with :noh)
+set incsearch          " Incremental search
+set ignorecase         " Case-insensitive search...
+set smartcase          " ...unless uppercase is used
+set autoindent         " Indenting code
+set scrolloff=5        " Keep 5 lines visible above/below cursor
+set wildmenu           " Tab completion in command mode
+syntax on
+
+" Enable 24-bit true color in terminals that support it
+if exists('+termguicolors')
+    let &t_8f = "\<Esc>[38;2;%lu;%lu;%lum"
+    let &t_8b = "\<Esc>[48;2;%lu;%lu;%lum"
+    set termguicolors
+endif
+
+" ---------------------------------
+" Setting up autocomplete
+" ---------------------------------
 
 if executable('clangd')
   augroup lsp_clangd
@@ -36,3 +68,17 @@ if executable('clangd')
       \ })
   augroup END
 endif
+
+" ---------------------------------
+" Fugitive
+" ---------------------------------
+
+" Diff colors
+highlight DiffAdd    ctermfg=NONE ctermbg=green  guibg=#a6e3a1
+highlight DiffDelete ctermfg=NONE ctermbg=red    guibg=#f38ba8
+highlight DiffChange ctermfg=NONE ctermbg=yellow guibg=#f9e2af
+highlight DiffText   ctermfg=NONE ctermbg=blue   guibg=#89b4fa
+
+" Fugitive: \ml \mr in resolving git conflicts
+nnoremap <silent> ml :diffget //2<CR>
+nnoremap <silent> mr :diffget //3<CR>
