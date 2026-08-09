@@ -4,8 +4,65 @@ This project is the C++ implementation of the [Altx](https://github.com/halmosb/
 
 The purpose of this document is to plan the development of the code: before the start of the development the development tools (vim, git, Github CI/CI, Google Tests, CMake, Docker) and libraries (OpenMP, MPI, HIP, HDF5) are defined.
 
+## Contents
+
+- [Goal of the code](#goal-of-the-code) -- the algorithm, and the three properties of it that
+  drive everything below
+- [Structure of the code](#structure-of-the-code) -- two orthogonal axes, the backend seam, the
+  directory layout, the parallel decomposition
+- [File formats](#file-formats) -- the ALTX file, normative, a contract with the Python
+  implementation
+- [Docker](#docker) -- the image matrix, tags, Python policy, editor and profiler setup
+- [Pre-commit](#pre-commit) -- what is checked where, and how the documentation rules are enforced
+- [Github CI/CD](#github-cicd) -- workflows, what runs when, runner constraints
+- [High performance computing libraries](#high-performance-computing-libraries) -- HDF5, OpenMP,
+  MPI, HIP, LAPACK/BLAS
+- [Argument parser](#argument-parser), [Storing tensors](#storing-tensors),
+  [Scalar type](#scalar-type)
+- [Numerical policy](#numerical-policy-nan-is-not-a-legal-value) -- NaN is not a legal value
+- [CMake](#cmake), [Google Tests](#google-tests)
+- [Development stages](#development-stages) -- and what is testable without hardware
+
+### The decisions that everything else follows from
+
+If only a few things are read from this document, these are the ones that constrain the rest:
+
+| Decision | Where |
+| --- | --- |
+| There are two orthogonal axes (backend, distribution), not three versions | [Structure](#two-orthogonal-axes-not-three-versions) |
+| The backend is chosen at **run time**, so both live in one binary | [The backend seam](#the-backend-seam) |
+| One HDF5 schema for input, model and output, shared with Python | [File formats](#the-altx-file-normative) |
+| Laws are replicated, instances are distributed; no per-class communicator | [Parallel decomposition](#parallel-decomposition) |
+| NaN is not a legal value anywhere in the pipeline | [Numerical policy](#numerical-policy-nan-is-not-a-legal-value) |
+| The eigensolver is hand-written, not LAPACK, and the GPU backend uses no SOLVER library | [LAPACK, BLAS](#the-eigenproblem-lapack-is-the-wrong-tool-at-this-size) |
+| Serial and OpenMP must produce **bitwise identical** output | [OpenMP](#the-same-code-should-also-mean-the-same-numbers) |
+
 ## Goal of the code
 The code should implement the Altx algorithm by first extracting the laws from the training set, then it should transform the transform set.
+
+Stated precisely, so that the rest of this document has something concrete to refer to. The data
+is a set of instances, each holding `m` channels of time series. There are two phases.
+
+**Train.** For each `(r, l, k)` triplet, slide a window of length `r` with step `k` over every
+channel of every instance. Each window is sub-sampled with stride `step = (r-1)/(2l-2)` and
+embedded into a symmetric `l x l` matrix `S`. The eigenvector belonging to the **smallest
+absolute** eigenvalue of `S` is a *law*. The laws are collected into `P`, each tagged with the
+class label of the instance it came from. A window whose eigendecomposition fails contributes no
+law.
+
+**Transform.** For a test instance, build the same windowed embedding and project it onto every
+stored law, giving a matrix `M` per channel. Square it, split the law axis by class, and reduce
+each class's block to scalars: a quantile along the law axis, then a statistic along the window
+axis. The feature vector has length `len(RLK) * noc * n_methods * m`.
+
+Three properties of this shape drive nearly every decision in this document:
+
+- The train phase is a very large number of **independent, tiny** eigenproblems -- which is why it
+  parallelises trivially and why LAPACK is the wrong tool for it.
+- The transform phase is a **thin-`k` GEMM followed by a selection**, which is bandwidth-bound and
+  whose intermediate result must never be fully materialised.
+- The two phases share nothing but `P`, which is **small**. That is what allows the laws to be
+  replicated across MPI ranks and the whole load-balancing problem to disappear.
 
 ## Structure of the code
 
@@ -154,7 +211,7 @@ needed:
 
 ## File formats
 
-### The ALTX file (`.h5`) -- normative
+### The ALTX file (normative)
 
 There is **one** HDF5 schema, not a separate model file and feature file. A single file holds the
 parameters, and optionally the laws, the input data, the intermediate multiplied matrices, and the
@@ -1117,8 +1174,83 @@ workspace at all.
 
 ### Other development choices
 
+**C++ standard: C++20.** Two features earn it directly rather than as a matter of taste:
+`std::span`, which is exactly the non-owning view that `Tensor` needs to hand out, and
+`std::bit_cast` in `<bit>`, which is exactly what the
+[radix select](#selection-when-a-row-is-not-in-one-place) needs to reinterpret floats as unsigned
+integers without undefined behaviour. GCC 13 on Ubuntu 24.04 covers this comfortably. The one
+risk is `hipcc` lagging on C++20; if it does, the `.hip.cpp` translation unit drops to C++17
+alone, which is harmless because it sits behind the backend interface and shares no templates with
+the host code.
+
+**Exceptions, but not everywhere.** They are used for input validation, file format errors and
+configuration mistakes -- all of which happen once, outside any loop. They are used **never** in
+the compute kernels, which is not a style preference: HIP device code cannot use them at all, so
+the kernels must be exception-free by construction if the CPU and GPU paths are to share
+structure.
+
+> One consequence that is easy to miss: **an exception escaping on a single MPI rank hangs the
+> whole job**, because the other ranks wait forever in a collective the aborting rank will never
+> reach. Every rank's entry point therefore wraps its work in a `try`/`catch` that reports and
+> calls `MPI_Abort`. Getting this wrong produces a job that hangs instead of failing, which is far
+> more expensive to diagnose.
+
+**Logging** is a small header-only, level-based, rank-aware facility written in-project rather
+than a dependency such as spdlog -- consistent with the decision to avoid Boost. Only rank 0
+prints by default, output happens on one thread, and `--verbose` raises the level.
+
+**Namespace** `altx`, with sub-namespaces mirroring the directories (`altx::io`,
+`altx::backend`, `altx::dist`).
+
+**Random numbers** appear only in the benchmark harness and the synthetic dataset generator, never
+in the algorithm. They use `std::mt19937_64` with an explicit seed that is recorded in
+`/parameters`, so a benchmark run can be reproduced exactly.
+
 ## Argument parser
 I do not want to use Boost in the project, so the argument parser of the code will be the: [github/p-ranav/argparse](https://github.com/p-ranav/argparse).
+
+It is header-only and MIT licensed, it supports the subcommands that
+[the CLI](#command-line-interface) needs, and it is vendored the same way as HOP and GoogleTest
+(see [Dependencies](#dependencies)).
+
+### The parser fills `Parameters`; nothing else reads argv
+
+`argparse` is confined to `apps/altx_main.cpp`. It parses, validates and populates a single
+`Parameters` object, and everything below receives that object. No library code includes the
+parser header or touches `argv`. Three things follow from this, all of which are the reason for
+the rule:
+
+1. **Tests construct `Parameters` directly**, so every configuration is reachable from a unit test
+   without building a command line.
+2. **`/parameters` in the output file is a serialisation of that one object**, so the provenance
+   record cannot drift from what the program actually did.
+3. A future non-CLI entry point costs nothing.
+
+### Validation happens once, in one place
+
+The Python implementation validates `R`, `L` and `K` inside `__init__`, mixing type coercion,
+broadcasting of scalars against lists, and mathematical constraints. In C++ this splits cleanly:
+
+- **`argparse`** handles syntax -- the option exists, it is an integer, it appears the right number
+  of times.
+- **`Parameters::validate()`** handles semantics -- `R`, `L`, `K` broadcast to a common length;
+  every value positive; `(r-1) % (2l-2) == 0`; `r` no larger than the shortest instance.
+
+The semantic rules live with the data, not with the parser, because they must also run when
+`Parameters` is reconstructed from the `/parameters` group of an existing file rather than from a
+command line. Validation that only exists in the parser would be skipped on exactly the path where
+a mismatched file is most likely.
+
+### Extraction methods on the command line
+
+The Python API takes `[["mean", 0.05], ["mean_all"]]`, where a missing quantile defaults to `0.05`
+and `mean_all` takes none. The CLI spelling is `--extract mean:0.05 --extract mean_all`, repeated
+per method, with the same defaulting rule.
+
+> The Python implementation **mutates the caller's list in place** while applying that default, so
+> reusing one list across calls changes its meaning. The C++ parser produces a new value and never
+> writes back. This is a deliberate divergence and it cannot affect the round-trip comparison,
+> since each fixture run parses its methods once.
 
 ## Storing tensors
 Since for MPI and HIP the values has to be stored in a way that a raw pointer should be available for the data. Also the row-major order of the data should be consistent.
@@ -1132,7 +1264,8 @@ that MPI and HIP require.
 
 The layout principle throughout the code is **channel index outermost**, because every stage of
 the algorithm is independent per channel and this is the only layout that lets the projection go
-straight into BLAS. See rule 2 of the model file specification for the derivation.
+straight into BLAS. See rule 2 of [the ALTX file specification](#the-altx-file-normative)
+for the derivation.
 
 ## Scalar type
 The scalar type is a **typedef selected at configure time**, `ALTX_SCALAR = double` (default) or
@@ -1321,7 +1454,7 @@ every invocation.
 `--dirty` matters: a build from a modified working tree gets a hash marked as such, so results
 that cannot be reproduced from any commit are visibly labelled instead of appearing trustworthy.
 
-### HIP
+### HIP language support
 
 `enable_language(HIP)` is called only under `ALTX_ENABLE_HIP`, with `CMAKE_HIP_ARCHITECTURES` set
 from a cache variable. Because the same `.hip.cpp` source is compiled either as HIP or, through
@@ -1352,8 +1485,8 @@ over.
 For the testing Google Tests will be used. There should be both unit tests and integration tests. Experimenting with test driven development might also be employed.
 
 ### Cross-language round-trip test
-Because the model file is a contract with the Python implementation, the central integration test
-is a round trip:
+Because the [ALTX file schema](#the-altx-file-normative) is a contract with the Python
+implementation, the central integration test is a round trip:
 
 1. Python trains on a fixed seed and writes an ALTX file containing `/laws`, `/data` and its own
    `/features`.
@@ -1365,13 +1498,51 @@ Small fixtures (a seeded model and the expected features, a few hundred kilobyte
 to the repository rather than regenerated in CI, so that the C++ test job needs no Python
 interpreter and the comparison is deterministic. `scripts/gen_reference.py` regenerates them.
 
-The comparison is on **features, not on laws**. Eigenvectors are defined only up to sign and the
-ordering of the laws will differ between implementations, but the algorithm squares the projection
-result, so the features are well defined.
+The comparison is primarily on **features**, which are always well defined: the algorithm squares
+the projection result, so the sign ambiguity of eigenvectors cannot reach them.
+
+Laws can additionally be compared, but only under two conditions established elsewhere in this
+document: the [canonical sign](#canonical-sign) convention must be applied on both sides, and the
+comparison must be serial, because law **ordering** is deterministic in serial but permuted under
+MPI. Where both hold, the law-level comparison is much sharper than the feature-level one, since
+it localises a discrepancy to a single window instead of to a whole feature vector.
+
+A fixture that deliberately approaches the degenerate cases belongs in the set: a constant time
+series, which drives the variance to zero and exercises the
+[divergences from Python](#deliberate-divergences-from-python). Conversely, fixtures must contain
+no [near-degenerate eigenvalues](#near-degenerate-eigenvalues), because there the choice of law is
+genuinely ill-conditioned and a disagreement would indicate nothing.
 
 ### Cross-backend test
 The same input is pushed through the CPU and the HIP backend and the outputs are diffed. This is
 the reason the backend seam is a runtime choice rather than a compile-time one.
+
+### Test taxonomy
+
+Tests are labelled for CTest so that CI can select subsets
+(see [Run tests](#run-tests)):
+
+| Label         | Contents                                                                  |
+| ------------- | ------------------------------------------------------------------------- |
+| `unit`        | one component in isolation: `Tensor` indexing, `RLK` validation, the readers and writers, each extraction method |
+| `integration` | end to end through the CLI, including the round trip above                 |
+| `mpi`         | launched through `mpiexec`; run with `-n 4 --oversubscribe` in CI          |
+| `gpu`         | requires a device; skipped on hosted runners, where `--device cpu` covers the rest |
+| `slow`        | the sanitizer and large-input runs, nightly only                           |
+
+Three differential tests carry disproportionate weight, because each one pins an
+implementation against an independent oracle rather than against a hardcoded expectation:
+
+1. **Jacobi against LAPACK** on random symmetric matrices
+   ([two implementations](#two-implementations-one-interface-one-differential-test)).
+2. **Serial against OpenMP**, asserting *bitwise* equality, which the determinism rules make a
+   legitimate demand rather than an aspiration
+   (see [the same numbers](#the-same-code-should-also-mean-the-same-numbers)).
+3. **CPU against HIP**, as above.
+
+Test-driven development fits the extraction methods and `Tensor` particularly well, since their
+expected values can be written down independently of any implementation. It fits the backends
+less well, where the oracle is another implementation rather than a known answer.
 
 ## Development stages
 0. (current) Planning the code structure and development process.
