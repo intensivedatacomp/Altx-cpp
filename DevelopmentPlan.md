@@ -124,7 +124,7 @@ Altx-cpp/
 |-- docker/                     # dev-cpu, dev-gpu, run-{cpu,mpi,hip,mpi-omp}
 |-- docs/                       # Doxyfile.in, mainpage.md
 |-- scripts/                    # gen_reference.py, doc and version checks
-|-- external/                   # argparse, fetched by CMake
+|-- external/                   # argparse and HOP, fetched by CMake
 `-- .github/workflows/
 ```
 
@@ -306,22 +306,241 @@ There should be 2 different images: for development and for running.
 There should 2 development packages:
 - CPU only: OpenMP, MPI, BLAS, LAPACK, HDF5, debuggers, profilers.
 - GPU: OpenMP, MPI, BLAS, LAPACK, HDF5, debuggers, profilers.
-For running the code there should be other smaller images:
-- Serial / OpenMP with BLAS and LAPACK.
-- MPI
-- HIP
-- OpenMP / MPI
+
+### Image matrix
+
+A runtime image is defined by the **shared libraries it must carry**, not by the build flags of
+the binary inside it. This collapses the originally planned four runtime images:
+
+- "Serial / OpenMP" and "OpenMP / MPI" and "MPI" do not need three images. Serial and OpenMP have
+  identical runtime dependencies (`libgomp` is present either way), and the two MPI variants
+  differ from each other only in a compile flag.
+- Therefore: **serial and OpenMP ship as two binaries in one image**, which is also what
+  development stage 4 needs, since an honest serial-versus-OpenMP profiling comparison requires a
+  genuinely non-OpenMP binary rather than `OMP_NUM_THREADS=1`.
+
+The resulting set is three runtime images and two development images:
+
+| Image           | Runtime libraries                                   | Binaries                     |
+| --------------- | --------------------------------------------------- | ---------------------------- |
+| `runtime-cpu`   | OpenBLAS, LAPACK, serial HDF5, libgomp              | `altx-serial`, `altx-omp`    |
+| `runtime-cpu-mpi` | + OpenMPI, parallel HDF5                          | `altx-mpi`, `altx-omp-mpi`   |
+| `runtime-gpu`   | + ROCm runtime, rocBLAS, rocSOLVER                  | `altx-hip`, `altx-hip-mpi`   |
+| `dev-cpu`       | everything above minus ROCm, plus the toolchain      | --                           |
+| `dev-gpu`       | `dev-cpu` plus the ROCm SDK and `hipcc`             | --                           |
+
+MPI is kept in its own image because it is the dependency with a **host compatibility
+constraint** -- clusters frequently require the container MPI to match the site MPI -- so it is
+the one that will need rebuilding per deployment. The GPU image absorbs its MPI variant instead of
+splitting further, because `libmpi` is negligible next to a multi-gigabyte ROCm layer.
+
+**Not all five images are built at once.** There is no target cluster yet, and the first milestone
+is a working serial and OpenMP version, so the order is:
+
+1. `dev-cpu` and `runtime-cpu` -- everything needed for stages 1 to 4.
+2. `runtime-cpu-mpi` -- when stage 5 starts. Since the MPI flavour of a future cluster is unknown,
+   this image is built against the distribution OpenMPI and treated as **provisional**; the MPI
+   flavour stays a base-image `ARG` precisely so it can be re-pointed later without touching
+   anything else.
+3. `dev-gpu` and `runtime-gpu` -- when stage 6 starts, and only if AMD hardware is available.
+
+Writing the full matrix down now is still worthwhile, because it is what keeps the CMake options
+orthogonal. Building it all now is not.
+
+Note that the binary names describe the **build configuration**, not the device: because the
+backend is selected at run time, `altx-hip` also runs on the CPU with `--device cpu`. That is
+exactly what makes the cross-backend diff test possible.
+
+### Build structure
+
+```
+base-cpu   (runtime libraries only, pinned by digest)
+ |-- dev-cpu       (+ compilers, CMake, gdb, Score-P, vim/clangd, doxygen, lcov, python)
+ |    `-- dev-gpu  (+ ROCm SDK, hipcc)
+ `-- runtime-*     (multi-stage: FROM dev-* AS builder, then COPY --from into base)
+```
+
+The runtime images are produced by **compiling inside the development image and copying the
+binaries into the base image**. This is the point of the layering: it makes "builds in the dev
+container" and "builds in CI" the same statement by construction, rather than two things that
+drift apart.
+
+```
+docker/
+|-- base.Dockerfile       # ARG FLAVOR=cpu|gpu
+|-- dev.Dockerfile
+|-- runtime.Dockerfile    # multi-stage
+|-- vim/                  # init.lua, plugin list, clangd config
+`-- scripts/              # entrypoints, MPI wrapper
+```
+
+Base images are pinned by **digest**, but individual apt package versions are not: Ubuntu drops
+old versions from the archive, so pinning them turns every base refresh into a maintenance task
+for very little additional reproducibility.
+
+### Presets map one-to-one onto images
+
+`CMakePresets.json` and the image matrix are one artifact. Every preset names the image it is
+built in, so a configuration that CI builds is always a configuration a developer can reproduce.
+
+| Preset                | Image             | OPENMP | MPI | HIP | Build type          |
+| --------------------- | ----------------- | ------ | --- | --- | ------------------- |
+| `cpu-serial-release`  | `runtime-cpu`     | OFF    | OFF | OFF | Release             |
+| `cpu-omp-release`     | `runtime-cpu`     | ON     | OFF | OFF | Release             |
+| `cpu-mpi-release`     | `runtime-cpu-mpi` | OFF    | ON  | OFF | Release             |
+| `cpu-omp-mpi-release` | `runtime-cpu-mpi` | ON     | ON  | OFF | Release             |
+| `gpu-hip-release`     | `runtime-gpu`     | ON     | OFF | ON  | Release             |
+| `gpu-hip-mpi-release` | `runtime-gpu`     | ON     | ON  | ON  | Release             |
+| `*-debug`             | `dev-*`           | as above     |     |     | Debug + sanitizers  |
+| `coverage`            | `dev-cpu`         | ON     | OFF | OFF | Debug + gcov        |
+
+### Library choices
+
+- **BLAS: OpenBLAS by default, MKL behind a build ARG.** The earlier `ALT-CPP` defaulted to MKL
+  with hardcoded `/opt/intel/oneapi` paths. Since the GPU target is AMD, the CPUs are likely AMD
+  too, where MKL has historically dispatched to slower code paths. AMD AOCL/BLIS is the
+  alternative worth benchmarking in development stage 4.
+- **HDF5: distribution packages for both flavours.** Ubuntu installs serial and parallel HDF5 side
+  by side under `hdf5/serial` and `hdf5/openmpi`, and CMake selects between them with
+  `HDF5_PREFER_PARALLEL`. This removes the custom `/opt/hdf5-parallel` build that `ALT-CPP`
+  needed.
+- **MPI: OpenMPI from the distribution** for development convenience. Cluster deployment may
+  require rebuilding against the site MPI, which is why the MPI flavour is a base-image ARG.
+- **GPU base: `rocm/dev-ubuntu-24.04` for AMD.** See the NVIDIA caveat below.
+
+### NVIDIA support via HOP
+
+The code is written in HIP and ported to CUDA only if needed, using
+[cschpc/hop](https://github.com/cschpc/hop) ("Header Only Porting", MIT licensed, from CSC).
+HOP redefines identifiers at preprocessing time and intercepts the include statements, so the port
+is a matter of compile flags rather than source changes:
+
+```
+# build the HIP sources for CUDA
+-x cu -I$HOP_ROOT -I$HOP_ROOT/source/hip -DHOP_TARGET_CUDA
+```
+
+Consequences for this project:
+
+- **HOP is vendored under `external/`** alongside `argparse`. It ships no CMake package, so a
+  small `INTERFACE` target in `cmake/` supplies the include directories, the `HOP_TARGET_*`
+  definition and the `-x` language flag.
+- **HOP covers the runtime API, BLAS, FFT, RAND, RTC and SPARSE, but there is no SOLVER header.**
+  This does not block us, because of a decision already taken for performance reasons: the
+  training step is a very large number of *tiny* `l x l` symmetric eigenproblems with `l` in the
+  range 3 to 8, which is served far better by a hand-written Jacobi kernel with one thread per
+  matrix than by a batched rocSOLVER call. The GPU backend therefore needs only the runtime API
+  and a batched GEMM for the projection, and both are inside HOP's coverage. **Do not introduce a
+  hipSOLVER dependency**, or the CUDA port stops being a flag change.
+- **HOP gives API portability, not performance portability.** Wavefront width differs (64 on AMD,
+  32 on NVIDIA) and occupancy tuning will not transfer. The one-thread-per-matrix Jacobi kernel is
+  largely insensitive to this, which is convenient, but the projection and the feature extraction
+  will still need retuning if CUDA becomes a real target.
+- Its documented weak spot is source files that do not include the GPU headers explicitly, so the
+  backend sources must include them rather than relying on transitive includes.
+
+A native `hip-runtime-nvidia`-on-CUDA base image is therefore **not** planned. If CUDA is ever
+needed, it is a new preset and a new image built from the same sources.
 
 ### Managing image tags
 
-### Vim
-Set-up autocomplete and syntax highlighting for the used libraries.
+The scheme follows [`docker-builder`](https://github.com/halmosb/docker-builder): every git tag
+produces a matching image tag, alongside a rolling tag, with a registry build cache and a Trivy
+scan. Two things are added, because `docker-builder` builds **only** on `v*` tags and that is not
+enough here: a development image that tracks the newest commit, and a content-addressed tag that
+keeps CI from rebuilding that image on every push.
 
-### Debuggers and profiles
-There should be debuggers and profiles in the docker images:
-- gdb
-- Intel VTune profiler
-- Score-P
+**One GHCR package per flavour**, with the version alone in the tag:
+
+```
+ghcr.io/<owner>/altx-cpp/dev-cpu:v1.2.3
+ghcr.io/<owner>/altx-cpp/runtime-cpu:v1.2.3
+```
+
+rather than `docker-builder`'s single package with the variant folded into the tag
+(`.../python:3.14-cpu-v0.2.0`). One package per flavour gives per-flavour retention rules, a
+separate Trivy category in the Security tab, a `latest` that means something per flavour, and --
+most usefully -- it makes registry cleanup a generic per-package rule instead of the
+variant-prefix regular expression that `docker-builder`'s `finalize` job has to maintain.
+
+| Tag               | Written on                       | Mutable | Audience                     |
+| ----------------- | -------------------------------- | ------- | ---------------------------- |
+| `vX.Y.Z`          | push of git tag `v*`             | no      | releases, reproducibility    |
+| `latest`          | push of git tag `v*`             | yes     | humans, "give me the release"|
+| `edge`            | push to `main`                   | yes     | **humans: newest dev image** |
+| `sha-<short>`     | every build                      | no      | debugging a specific build   |
+| `hash-<content>`  | when the image inputs change     | no      | **CI jobs**                  |
+
+The last two rows are the point:
+
+- **`edge` answers "I want the most recent development image."** `docker pull …/dev-cpu:edge` is
+  the everyday command, and a `main` build refreshes it.
+- **`hash-<content>` answers "CI must not rebuild the dev image on every commit."** The tag is a
+  hash of everything the image depends on: `docker/`, the base image digest and the package list.
+  The workflow computes the hash, asks the registry whether that tag exists, and **skips the build
+  entirely if it does**. A dev image build is minutes; a per-commit rebuild would dominate CI.
+
+These do not conflict: the same build pushes `edge`, `sha-…` and `hash-…` at once, which costs
+nothing because they are all one manifest. Humans follow the moving tag, CI pins the immutable
+one. CI must never reference `edge` or `latest` -- that is exactly the drift the layered build
+structure exists to prevent.
+
+Release builds additionally **pin by digest** (`@sha256:…`).
+
+### Registry hygiene
+
+Copied from `docker-builder`: a **single-writer `finalize` job** performs deletions, so parallel
+matrix jobs cannot race each other. Beyond that:
+
+- A scheduled weekly workflow prunes untagged versions, which GHCR otherwise accumulates forever.
+- `hash-…` tags are garbage: prune those not referenced by any workflow file, older than 90 days.
+- `sha-…` tags are pruned after 30 days. `vX.Y.Z` tags are never deleted.
+
+> **Check before copying:** `docker-builder`'s cleanup job calls
+> `/orgs/{owner}/packages/container/…`. That endpoint is for **organisation**-owned packages. If
+> the account is a personal one, the calls need `/user/packages/…` (delete) and
+> `/users/{owner}/packages/…` (list) instead, and the existing job may be silently failing.
+
+### Vim
+
+The right mechanism is **clangd driven by `compile_commands.json`**, which CMake emits with
+`CMAKE_EXPORT_COMPILE_COMMANDS=ON`. Autocomplete and diagnostics for OpenMP, MPI, HDF5 and BLAS
+then work with no per-library configuration, because clangd sees the real include paths and
+defines of the actual build. Neovim with the built-in LSP client is the proposed editor
+configuration, shipped as `docker/vim/`.
+
+The one thing that needs deliberate handling: **clangd does not understand `hipcc`.** Entries for
+`.hip` files must either be rewritten to `clang` with the HIP flags, or clangd must be given
+`--query-driver`. Without this, the GPU sources are the only part of the codebase with no editor
+support, which is exactly where it would be missed most.
+
+The same image is used for VS Code through a `.devcontainer/devcontainer.json`, so both editors
+resolve symbols identically.
+
+### Debuggers and profilers
+
+There should be debuggers and profilers in the development images:
+
+- **gdb** -- from apt, no complications.
+- **Score-P** -- not packaged for Ubuntu; it must be built from source against `binutils-dev`,
+  `libunwind`, PAPI and the image's MPI. This is a slow source build, so it belongs in its own
+  build stage whose result is copied in, keeping it out of the iteration path.
+- **Intel VTune** -- available only through the Intel oneAPI apt repository, roughly 2--3 GB, and
+  it needs relaxed `perf_event_paranoid` plus `CAP_PERFMON` on the host, so it cannot be assumed
+  to work in every environment. Several of its features are Intel-only and therefore of limited
+  value on AMD hardware. It goes into the development image behind `ARG WITH_VTUNE=0` so the
+  default image stays lean, with `perf` and AMD uProf as the AMD-side alternative.
+- **rocprof / omniperf** -- included with ROCm in `dev-gpu`, for the HIP work in stage 6.
+
+### Vulnerability scanning
+
+Images are scanned with Trivy in CI. Runtime images **fail** the build on HIGH or CRITICAL
+findings; development images are **report-only**, since compilers, debuggers and VTune guarantee
+a permanent backlog of findings that would otherwise block all work.
+
+Size expectation: `runtime-cpu` in the low hundreds of MB, `runtime-gpu` several GB. The ROCm
+layer dominates and is reduced by installing the ROCm *runtime* rather than the full SDK in the
+runtime image -- the SDK belongs only in `dev-gpu`.
 
 ## Pre-commit? (Similar to pre-commit in Python)
 If possible, it should be enforced that the code is formated with clang-format and the documentation, which will be generated with Doxygen, in the code should be checked:
@@ -332,11 +551,111 @@ If possible, it should be enforced that the code is formated with clang-format a
 
 ## Github CI/CD
 
+### Workflows
+
+| Workflow           | Trigger                                     | Does                                                    |
+| ------------------ | ------------------------------------------- | ------------------------------------------------------- |
+| `pre-commit.yml`   | pull request, push to `main`                | the same hooks as the local pre-commit                   |
+| `dev-images.yml`   | push/PR touching `docker/**`                | build dev images if the content hash is absent; push     |
+| `build-test.yml`   | pull request, push to `main`                | the preset matrix: configure, build, `ctest`             |
+| `nightly.yml`      | schedule                                    | sanitizers, GPU build, Trivy, benchmarks                 |
+| `release.yml`      | push of git tag `v*`                        | rebuild all, version tags, Trivy gating, GitHub release  |
+| `docs.yml`         | push to `main`, git tag                     | Doxygen to GitHub Pages                                  |
+| `cleanup.yml`      | schedule, weekly                            | prune the registry                                       |
+
+`dev-images.yml` and `build-test.yml` form a dependency chain: the first outputs the
+content-addressed dev image tag, the second consumes it as a `--build-arg BASE_IMAGE`, and the
+runtime images are assembled from the compiled artefacts. This is the same layering described
+under [Build structure](#build-structure), expressed as a job DAG.
+
+### What runs when
+
+The constraint is that a pull request must stay fast enough to be useful, while a merge to `main`
+can afford breadth.
+
+**Per pull request (target: under ten minutes)**
+
+- `cpu-omp-release`: build and full `ctest`. This is the primary configuration.
+- `cpu-serial-debug` with ASan and UBSan: build and full `ctest`. Cheap, and it catches undefined
+  behaviour that the release build hides.
+- `pre-commit`.
+
+**Per merge to `main`**
+
+- All CPU presets, release and debug.
+- Coverage, from `coverage`, uploaded as a badge in the manner of the Python repository.
+- **`cpu-omp-mpi-release` with `mpirun -n 4 --oversubscribe`.** A hosted runner has four vCPUs, so
+  four ranks oversubscribe, but oversubscription affects speed and not correctness: the
+  decomposition, the allgather and the collective HDF5 writes are all genuinely exercised. The
+  MPI implementation can therefore be *finished and verified* in CI with no cluster; only the
+  scaling numbers need real hardware.
+- The cross-language round-trip against the committed Python fixtures.
+
+**Nightly**
+
+- Full sanitizer sweep, including TSan on the OpenMP build.
+- The synthetic-dataset benchmark from development stage 4, with results retained so regressions
+  are visible over time.
+- Trivy over all images.
+- The GPU build, see below.
+
+### The GPU job builds, and still runs the tests
+
+GitHub-hosted runners have no AMD GPU, so a HIP job can normally only prove that the code
+compiles. Here it can do better, because **the backend is chosen at run time**: the binary built
+by `gpu-hip-release` contains both backends, so on a GPU-less runner
+
+```
+altx-hip --device cpu
+```
+
+runs the entire test suite. The GPU job therefore validates that the HIP translation unit
+compiles and links, *and* that the rest of the program is unbroken, on hardware that has no GPU.
+Only the correctness of the device kernels themselves has to wait. This is a concrete payoff from
+choosing a runtime seam over compile-time dispatch.
+
+The GPU job is nightly, not per-PR: the ROCm toolchain image is several gigabytes, and pulling it
+would dominate pull request latency.
+
+### Runner constraints
+
+Hosted `ubuntu-latest` runners provide four vCPUs, 16 GB of RAM and roughly 14 GB of free disk.
+The disk is the binding constraint once ROCm is involved, so the GPU jobs need a disk-reclaim step
+before the pull. Registry-backed build caching, as `docker-builder` already uses
+(`type=registry,mode=max`), applies here unchanged and matters more, since a C++ toolchain layer
+is far more expensive to rebuild than a `pip install`.
+
 ### Build documentation with Doxygen
 The HTML documentation of the code should be build automatically with Doxygen. The docker images should be scanned for vulnerabilities.
 
+Doxygen runs on every push to `main` and publishes to GitHub Pages. Warnings are errors, which is
+what makes the "every function and every argument is documented" rule of the
+[pre-commit section](#pre-commit-similar-to-pre-commit-in-python) enforceable rather than
+aspirational: `WARN_NO_PARAMDOC = YES` plus `WARN_AS_ERROR = YES` turns an undocumented parameter
+into a failed build.
+
+Vulnerability scanning follows `docker-builder`: Trivy with `scanners: vuln`, SARIF uploaded to
+the GitHub Security tab under a per-image category, `ignore-unfixed: true` and a `.trivyignore`.
+The difference is the gating, described under
+[Vulnerability scanning](#vulnerability-scanning): runtime images fail on HIGH or CRITICAL,
+development images are report-only.
+
 ### Run tests
 The tests should be run automatically and code coverage should be calculated.
+
+Test binaries are registered with CTest and labelled, so that a job can select a subset:
+`unit`, `integration`, `mpi`, `gpu`, `slow`. The pull request jobs run everything except `slow`
+and `gpu`.
+
+### Version consistency
+
+The plan asks for a check that the version in the argument parser and the documentation matches
+the latest git tag. A check is the wrong mechanism: **derive the version instead**, with
+`git describe --tags` feeding `Version.hpp.in` through `configure_file`, and have the argument
+parser and the Doxygen configuration both read that single value. Then the versions cannot
+disagree, and no CI job is needed to confirm it. The one thing still worth verifying is that a
+release build was made from a clean, tagged commit, which `git describe --dirty --exact-match`
+answers in one line in `release.yml`.
 
 ## High performance computing libraries
 
@@ -358,7 +677,12 @@ The serial and the OpenMP code should be the same but sometimes the OpenMP is en
 The load balancing might be difficult, if the dataset is imbalanced. There should be communicator for each unique class in the data, but then the load balancing will be difficult. The data can be divided easily between the ranks, but then the feature extraction will be difficult.
 
 ### HIP
-It should be possible to run the code on NVIDIA and on AMD GPUs, so it will be written in HIP.
+It should be possible to run the code on NVIDIA and on AMD GPUs, so it will be written in HIP and
+ported to CUDA with [HOP](https://github.com/cschpc/hop) if needed. See
+[NVIDIA support via HOP](#nvidia-support-via-hop) for the consequences, the most important of
+which is that the GPU backend must restrict itself to the runtime API and a batched GEMM. The
+eigenproblems are solved by a hand-written Jacobi kernel, one thread per matrix, which is both
+faster for `l` in the range 3 to 8 and free of the SOLVER dependency that HOP does not cover.
 
 ### LAPACK, BLAS
 Wrapper classes will be written around the low-level APIs.
@@ -432,7 +756,20 @@ the reason the backend seam is a runtime choice rather than a compile-time one.
 2. Freezing the ALTX file schema and modifying the Python implementation to write it. This comes
    before the C++ algorithm, because it produces the fixtures that every later stage is tested
    against.
-3. Creating the serial version of the code.
+3. Creating the serial version of the code. **This is the first milestone**: serial and OpenMP
+   working and matching the Python implementation.
 4. Profiling the serial version. Creating another project with generated synthetic dataset and profiling with which the different versions can be compared.
 5. Creating and profiling MPI version.
 6. Creating and profiling HIP version.
+
+What each stage needs in the way of hardware, given that there is no cluster yet:
+
+| Stage | Testable now?                                                                        |
+| ----- | ------------------------------------------------------------------------------------ |
+| 1--4  | Yes, entirely on a workstation.                                                       |
+| 5     | **Correctness yes, scaling no.** `mpirun -n 4` on one machine exercises the decomposition, the allgather and the collective HDF5 writes, so the logic can be finished and tested. Multi-node scaling numbers must wait for cluster access. |
+| 6     | Needs an AMD GPU. Blocked on hardware.                                                |
+
+Because stage 6 is hardware-blocked and stage 5 is only half-verifiable, the order of 5 and 6 is
+not fixed; whichever hardware becomes available first should go first. The architecture makes this
+cheap, since the backend axis and the distribution axis are independent.
