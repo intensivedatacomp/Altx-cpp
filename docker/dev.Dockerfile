@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     ca-certificates \
+    bash-completion \
     && rm -rf /var/lib/apt/lists/*
 
 # libomp-18-dev is not optional: clangd is clang, and clang does not search
@@ -52,6 +53,13 @@ ARG USERNAME=non_root
 # silently resolves to the filesystem root -- while ${HOME} in a RUN still works,
 # because there the shell does the expanding.
 ENV HOME=/home/${USERNAME}
+
+# Vim initialises 'shell' from $SHELL. Bash sets SHELL as a shell variable but
+# does not export it, so a child process such as vim never sees it and falls
+# back to /bin/sh -- dash, which has no line editing and no tab completion.
+# That is what makes `:vert term` feel broken. Exporting it here fixes :term,
+# and anything else that spawns $SHELL.
+ENV SHELL=/bin/bash
 
 # ubuntu:24.04 already ships a user at uid/gid 1000. Removing it also removes
 # its primary group, so the group has to be recreated before useradd can use it.

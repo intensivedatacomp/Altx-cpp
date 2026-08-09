@@ -3,6 +3,17 @@
 " skip the lsp#register_server block below and leave clangd unregistered.
 set nocompatible
 
+" ---------------------------------------------------------------------------
+" Terminal (:term, :vert term)
+" ---------------------------------------------------------------------------
+" Belt and braces alongside ENV SHELL in the Dockerfile: if $SHELL is ever
+" unset or overridden, vim would otherwise run /bin/sh (dash) here, which has
+" no tab completion and no history.
+set shell=/bin/bash
+
+" Leave terminal-insert mode without the <C-w>N chord.
+tnoremap <Esc><Esc> <C-\><C-n>
+
 call plug#begin('~/.vim/plugged')
 Plug 'prabirshrestha/async.vim',            { 'commit': '2082d13bb195f3203d41a308b89417426a7deca1' }
 Plug 'prabirshrestha/vim-lsp',              { 'commit': '2b1545846f136949576aa2b8d73b80bebad91041' }
