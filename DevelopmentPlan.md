@@ -835,7 +835,96 @@ All of this goes into **one** file with optional groups, specified normatively u
 implementation and must not be changed without a `format_version` bump.
 
 ### OpenMP
-The serial and the OpenMP code should be the same but sometimes the OpenMP is enabled and sometimes disabled. 
+The serial and the OpenMP code should be the same but sometimes the OpenMP is enabled and sometimes disabled.
+
+#### One thing breaks "the same source"
+
+`#pragma omp` directives vanish when the compiler is invoked without `-fopenmp`, so the
+directives themselves need no guarding. The **runtime API** does not: `omp_get_thread_num()` and
+`omp_get_max_threads()` become undefined symbols, and guarding each call site with `#ifdef
+_OPENMP` would scatter conditionals through the algorithm -- exactly what
+[the two-axis design](#two-orthogonal-axes-not-three-versions) forbids.
+
+The fix is a shim, `src/core/Omp.hpp`, exposing `altx::omp::thread_num()` and `max_threads()`
+which return `0` and `1` when `_OPENMP` is undefined. **One `#ifdef`, in one file**, and the
+algorithm never mentions OpenMP outside a pragma.
+
+#### Where the parallelism goes
+
+**Training** parallelises over a flattened `(instance, channel, window)` index space. It has to be
+flattened rather than `collapse(3)`, because instances have different `train_length` values and
+the loop nest is therefore not rectangular. That flat index space is the same one
+[MPI splits](#parallel-decomposition), so a single decomposition serves both axes -- which is what
+makes MPI+OpenMP a combination rather than a third implementation.
+
+**Transforming** parallelises over instances in `transform_set`. For a single instance there are
+no instances to spread, so the parallelism moves inward to the row blocks of
+[the projection loop](#the-projection-is-a-thin-k-gemm-and-m-may-not-fit). These are two separate
+parallel regions selected by which level is non-trivial; they are never nested.
+
+#### "The same code" should also mean the same numbers
+
+The requirement is worth reading strictly: serial and OpenMP builds should produce **bitwise
+identical output**, not merely similar output. That is achievable here, and it converts the
+serial-versus-OpenMP comparison from a tolerance check into an exact one, where any difference at
+all is a bug rather than noise. Two things are needed.
+
+**Compact the laws with a prefix sum, not an atomic counter.** Failed eigendecompositions leave
+gaps, and the surviving laws must be packed down. Appending through an atomic index is the obvious
+implementation and it is wrong: the resulting law order depends on thread scheduling, so `/laws`
+would differ between runs and between thread counts. A prefix sum over the validity flags assigns
+each surviving law the position it would have had serially, at negligible cost. This is what makes
+the law-level comparison of
+[canonical sign](#canonical-sign) meaningful across thread counts.
+
+**Reduce in a fixed order.** `reduction(+:sum)` over the row axis gives a result that depends on
+the number of threads, because floating-point addition is not associative. Instead, each block
+writes its partial sum to a slot indexed by block number, and those partials are summed
+sequentially afterwards. There are only `nol_tilde / B` of them, so the cost is nothing and the
+result no longer depends on the thread count.
+
+#### Thread-safety rules
+
+- **All I/O happens outside parallel regions.** The HDF5 C library is not thread-safe unless
+  specially built, and even then it serialises on a global lock. One thread does the writing.
+- **Per-thread LAPACK workspace.** The `SymEigenSolver` of the
+  [reference path](#two-implementations-one-interface-one-differential-test) holds a workspace, so
+  each thread needs its own instance. The Jacobi kernel is stateless and needs nothing.
+- **BLAS stays single-threaded** beneath the OpenMP loop, as described under
+  [Threading](#threading-parallelism-at-one-level-only).
+
+#### Scheduling and false sharing
+
+Work per window is nearly constant -- same `l`, similar Jacobi iteration counts -- so
+`schedule(static)` is the starting point, to be confirmed in development stage 4.
+
+Static scheduling also matters for a reason beyond load balance. With `P` stored as
+`(m, l, n_laws)`, consecutive laws are adjacent in memory, so threads writing neighbouring law
+indices would share cache lines. Static scheduling gives each thread a contiguous run and confines
+false sharing to the two boundaries per thread; `schedule(dynamic, 1)` would be pathological here.
+
+#### What OpenMP is deliberately not used for
+
+**GPU offload.** OpenMP 5 target offload is a genuine alternative to HIP, and it is rejected: the
+Jacobi kernel and the radix select both want explicit control over thread-per-matrix mapping and
+shared memory, and the project already commits to HIP plus [HOP](#nvidia-support-via-hop) for
+portability. OpenMP here is a CPU-only construct. This is recorded so the choice is not
+re-litigated later.
+
+The baseline is OpenMP 4.5, which every compiler in the images supports comfortably.
+
+#### Testing
+
+The test suite runs at several thread counts and asserts **bitwise identical** results, which the
+determinism rules above make a legitimate assertion rather than an aspiration.
+
+ThreadSanitizer needs care: GCC's `libgomp` is not instrumented, so TSan reports a flood of false
+positives on any OpenMP program built with it. The nightly TSan job must therefore use Clang's
+`libomp`, or Archer, the OpenMP-aware TSan tool. Running TSan against `libgomp` and triaging the
+output is wasted effort.
+
+For benchmarking in stage 4, `OMP_PROC_BIND=close` and `OMP_PLACES=cores` are set by the benchmark
+harness -- not hardcoded in the program -- so that measurements are stable and comparable.
 
 ### MPI
 The load balancing might be difficult, if the dataset is imbalanced. There should be communicator for each unique class in the data, but then the load balancing will be difficult. The data can be divided easily between the ranks, but then the feature extraction will be difficult.
