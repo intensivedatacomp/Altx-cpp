@@ -501,6 +501,42 @@ matrix jobs cannot race each other. Beyond that:
 > the account is a personal one, the calls need `/user/packages/…` (delete) and
 > `/users/{owner}/packages/…` (list) instead, and the existing job may be silently failing.
 
+### Python in the images: light only, installed with uv
+
+The development images carry a **light** Python: enough for `pre-commit` and small helper scripts,
+and nothing more. The hard rule is **no pytorch**, because it is several hundred megabytes of
+wheel in an image that is otherwise pulled constantly.
+
+That rule decides where the fixture generator runs. `scripts/gen_reference.py` needs the Python
+`altx` and therefore torch, so **it runs in the existing
+[`docker-builder`](https://github.com/halmosb/docker-builder) image**,
+`ghcr.io/halmosb/docker-builder/python:3.14-cpu`, which already exists for exactly this kind of
+job. Nothing else in the C++ pipeline needs it: the fixtures are committed, and regenerating them
+is a rare, deliberate act rather than part of any build.
+
+For the light Python that does live in `dev-cpu` and `dev-gpu`, the answer to
+**uv or micromamba is uv**:
+
+- A single static binary, added with
+  `COPY --from=ghcr.io/astral-sh/uv:<pinned> /uv /usr/local/bin/uv`. No shell hook, no activation,
+  nothing to source in a `RUN` layer -- which is where conda-style tools cost the most inside a
+  Dockerfile, and the cost is pure overhead when the requirement is "pre-commit and a few
+  scripts".
+- Fast enough that the layer stops being something to think about.
+- `UV_COMPILE_BYTECODE=1`, `UV_LINK_MODE=copy`, a **pinned** uv version rather than `latest`, and a
+  lock file, so the image is reproducible.
+
+**micromamba is the better tool for a job this project does not have.** Its real advantage is
+conda-forge's handling of native libraries -- an `h5py` genuinely built against the same MPI and
+HDF5 that the C++ links, instead of the PyPI wheel's bundled serial HDF5. That matters when Python
+and C++ must share native libraries inside one process. Here they never do: they communicate only
+by exchanging `.h5` files as separate processes. So micromamba's strength goes unused while its
+activation machinery is paid for in every layer. Worth revisiting only if that changes.
+
+One practical detail: `pre-commit` builds and caches an environment per hook, so the image should
+run `pre-commit install-hooks` at build time to bake `~/.cache/pre-commit` into a layer.
+Otherwise the first commit in a fresh container pays for every hook environment at once.
+
 ### Vim
 
 The right mechanism is **clangd driven by `compile_commands.json`**, which CMake emits with
@@ -542,12 +578,140 @@ Size expectation: `runtime-cpu` in the low hundreds of MB, `runtime-gpu` several
 layer dominates and is reduced by installing the ROCm *runtime* rather than the full SDK in the
 runtime image -- the SDK belongs only in `dev-gpu`.
 
-## Pre-commit? (Similar to pre-commit in Python)
-If possible, it should be enforced that the code is formated with clang-format and the documentation, which will be generated with Doxygen, in the code should be checked:
+## Pre-commit
+It should be enforced that the code is formated with clang-format and the documentation, which will be generated with Doxygen, in the code should be checked:
 - Every function/class has documentation.
 - Every argument is documented.
 - Other linting (if possible) e.g. variable cases...
-- Check that the version in the argparse, documentation is consistent with the latest git tag.
+
+The question mark can be dropped: the **`pre-commit` framework itself is language-agnostic**. It
+is a git hook runner that happens to be written in Python, and it drives hooks in any language,
+including plain `system` hooks. The same `.pre-commit-config.yaml` structure as the Python
+repository carries over directly, with C++ hooks substituted for black, ruff and mypy. The
+framework needs a Python interpreter in the development image; that is the *only* reason one is
+there, and it is kept light -- see
+[Python in the images](#python-in-the-images-light-only-installed-with-uv). Note that the hooks
+supply their own tools, so this stays light: the `clang-format` PyPI package ships a binary wheel,
+and the hadolint, actionlint and shellcheck hooks fetch their own binaries.
+
+### Three tiers, split by what a check needs
+
+The organising principle is **what a check requires in order to run**, because that determines
+where it can live without making commits slow or unreliable:
+
+| Tier         | Requirement                          | Examples                                     |
+| ------------ | ------------------------------------ | -------------------------------------------- |
+| `pre-commit` | nothing but the changed files        | clang-format, whitespace, hadolint, actionlint |
+| `pre-push`   | the whole tree, still local          | Doxygen documentation coverage                 |
+| CI           | a **configured build**               | clang-tidy, `-Wdocumentation`, coverage        |
+
+The middle column is the reason clang-tidy is **not** a pre-commit hook. clang-tidy needs
+`compile_commands.json`, which only exists once CMake has configured a build directory. A hook
+that silently skips when the file is missing gives different results to different developers,
+which is worse than not having the check. clang-tidy therefore runs in CI, where the build is
+guaranteed, and locally on demand through a CMake target.
+
+Doxygen sits between the two: it needs no build, but it must see the whole tree, so it is too slow
+for every commit and belongs at `pre-push`. `pre-commit` supports this directly with
+`stages: [pre-push]`, so it is still one configuration file and one tool.
+
+### Hooks
+
+Carried over from the Python repository: `trailing-whitespace`, `end-of-file-fixer`, `check-yaml`,
+`check-json`, `check-merge-conflict`, `no-commit-to-branch` (`main` and `master`), and
+`check-added-large-files`.
+
+> `check-added-large-files` matters more here than it did in Python. The plan commits `.h5`
+> fixtures for the cross-language round-trip test, so the limit is the thing standing between the
+> repository and someone committing a multi-gigabyte dataset. The Python repository allows
+> `--maxkb=5000`; **500 is more appropriate** for fixtures that were deliberately chosen to be
+> small.
+
+Added for this project:
+
+| Hook                            | Purpose                                          |
+| ------------------------------- | ------------------------------------------------ |
+| `mirrors-clang-format`          | formatting, on changed files                     |
+| `gersemi` or `cmake-format`     | `CMakeLists.txt` and `*.cmake` formatting        |
+| `hadolint`                      | the Dockerfiles in `docker/`                     |
+| `actionlint`                    | the workflows in `.github/workflows/`            |
+| `shellcheck`                    | the entrypoints and helper scripts               |
+| `codespell`                     | typos, including in comments and documentation   |
+
+The last four exist because this project carries far more non-C++ configuration than the Python
+one did -- seven workflows, five Dockerfiles and a set of shell entrypoints -- and those are
+exactly the files where a mistake is not caught until CI runs.
+
+### Documenting every function and every argument
+
+This is enforceable, but only with the right Doxygen settings, and there is a trap:
+
+```
+EXTRACT_ALL           = NO                    # YES SILENTLY DISABLES the check below
+WARN_IF_UNDOCUMENTED  = YES                   # "every function/class has documentation"
+WARN_NO_PARAMDOC      = YES                   # "every argument is documented"
+WARN_AS_ERROR         = FAIL_ON_WARNINGS      # report everything, then fail
+```
+
+`EXTRACT_ALL = YES` is the common default and it **suppresses undocumented-entity warnings**,
+because it tells Doxygen to document everything whether or not the author wrote anything. With it
+set, `WARN_IF_UNDOCUMENTED` has no effect and the check appears to pass while enforcing nothing.
+`FAIL_ON_WARNINGS` is preferred over plain `YES` because it completes the run before failing, so
+one push reports every missing comment rather than only the first.
+
+A complementary check runs in CI, on the compiler rather than on Doxygen: **`-Wdocumentation` and
+`-Wdocumentation-pedantic`** (Clang) verify that a doc comment *agrees with the code* -- a
+`\param` naming an argument that does not exist, a documented return on a `void` function, a
+parameter renamed without updating its comment. Doxygen catches documentation that is **missing**;
+`-Wdocumentation` catches documentation that is **wrong**. The second failure mode is the one that
+appears later in a project's life, when signatures change and comments do not.
+
+### Naming conventions
+
+clang-tidy's `readability-identifier-naming` covers the "variable cases" requirement, configured
+per entity kind in `.clang-tidy`, and it can auto-fix.
+
+There is a predictable conflict to plan for. The Python configuration already disables `N802`,
+`N803` and `N806` because the algorithm is written in mathematical notation -- `R`, `L`, `K`, `P`,
+`S`, `M`, `m`, `tau`, `nol`. The C++ port inherits those names, and a strict
+`readability-identifier-naming` will reject most of them. Rather than weakening the rule
+everywhere or annotating every occurrence with `NOLINT`, the resolution is to **confine the
+mathematical names to the layer that implements the mathematics** -- the backends and the
+algorithm classes -- and require descriptive names everywhere else, which is where an unfamiliar
+reader will be. The exception list belongs in `.clang-tidy` with a comment pointing at this
+paragraph.
+
+### The clang-format configuration
+
+`ALT-CPP` already has a `.clang-format`: Google-based, `IndentWidth: 4`, `ColumnLimit: 80`,
+`PointerAlignment: Left`. That is a reasonable house style and is worth carrying over. Two
+changes:
+
+1. **Commit a minimal delta, not a `--dump-config` output.** The existing file is a full dump of
+   every option for one clang-format version. New releases add options and occasionally change
+   defaults, so a full dump silently pins the project to the assumptions of the version that
+   produced it and produces large, meaningless diffs on every upgrade. `BasedOnStyle: Google` plus
+   the five or six genuine overrides expresses the same intent and survives upgrades.
+2. **Set `DerivePointerAlignment: false`.** The existing file sets `PointerAlignment: Left` and
+   then leaves Google's `DerivePointerAlignment: true` in place, which tells clang-format to infer
+   the alignment *per file* from what is already there -- so the explicit setting is ignored and
+   `int* p` and `int *p` can both persist in different files.
+
+### Keeping the hook and the image in agreement
+
+clang-format output differs between major versions, so a developer running a different version
+from CI will fight an endless reformatting loop. The version is pinned in **one** place and
+consumed by both: the `rev` of `mirrors-clang-format` and the `clang-format` installed in
+`dev-cpu` must match, and the simplest way to guarantee that is to **run `pre-commit` inside the
+development container**, where they are identical by construction.
+
+### Version consistency: not a check
+
+The original plan listed "check that the version in the argparse and the documentation is
+consistent with the latest git tag" as a pre-commit item. It is deleted here, because the version
+is **derived** rather than duplicated -- see
+[Version consistency](#version-consistency) under CI/CD. There is nothing to check when there is
+only one source.
 
 ## Github CI/CD
 
@@ -630,9 +794,9 @@ The HTML documentation of the code should be build automatically with Doxygen. T
 
 Doxygen runs on every push to `main` and publishes to GitHub Pages. Warnings are errors, which is
 what makes the "every function and every argument is documented" rule of the
-[pre-commit section](#pre-commit-similar-to-pre-commit-in-python) enforceable rather than
-aspirational: `WARN_NO_PARAMDOC = YES` plus `WARN_AS_ERROR = YES` turns an undocumented parameter
-into a failed build.
+[pre-commit section](#pre-commit) enforceable rather than aspirational. Note the
+`EXTRACT_ALL = NO` requirement documented there: with `EXTRACT_ALL = YES` the check silently
+enforces nothing.
 
 Vulnerability scanning follows `docker-builder`: Trivy with `scanners: vuln`, SARIF uploaded to
 the GitHub Security tab under a per-image category, `ignore-unfixed: true` and a `.trivyignore`.
@@ -687,6 +851,180 @@ faster for `l` in the range 3 to 8 and free of the SOLVER dependency that HOP do
 ### LAPACK, BLAS
 Wrapper classes will be written around the low-level APIs.
 
+The code has exactly two linear-algebra needs, and they pull in opposite directions:
+
+| Use            | Shape                                                        | Regime               |
+| -------------- | ------------------------------------------------------------ | -------------------- |
+| Training       | symmetric eigenproblem, `l x l`, `l` in 3..8, millions of them | call-overhead bound  |
+| Transform      | `(nol_tilde x l) * (l x n_laws)` per channel                  | memory-bandwidth bound |
+
+#### The eigenproblem: LAPACK is the wrong tool at this size
+
+Python calls `torch.linalg.eigh`, which reaches LAPACK `?syevd`. Translating that literally would
+be a mistake, because at `l = 4` the cost of a LAPACK call is dominated by the call itself:
+workspace queries, argument validation, and `ILAENV` blocking lookups, all repeated for every one
+of hundreds of thousands of windows. The matrix is too small for any of the blocked algorithms to
+reach their advantage.
+
+`?syevr` looks attractive because it can compute a subset, but it cannot help here: it selects
+eigenvalues by **index in ascending order** or by value range, whereas the algorithm needs the
+smallest eigenvalue *in absolute value*, which may sit anywhere in the spectrum. Getting it would
+take one call for all eigenvalues and a second for the chosen vector -- two calls where the
+problem wanted none.
+
+The alternative is a **cyclic Jacobi eigenvalue iteration**, hand-written: no workspace, no
+allocation, register-resident for `l <= 8`, branch-light, quadratically convergent, and with
+better relative accuracy than QR on small or graded matrices. The same kernel then serves both
+backends -- scalar or SIMD on the CPU, one thread per matrix on the GPU -- which is the shape
+already required by [HOP's missing SOLVER coverage](#nvidia-support-via-hop).
+
+That convergence is worth stating plainly: the hand-written eigensolver was introduced earlier as
+a *GPU* necessity, but it is independently the right *CPU* choice, for an unrelated reason. One
+kernel satisfies both, and the cross-backend diff test compares it against itself.
+
+#### Two implementations, one interface, one differential test
+
+The claim above is a prediction, not a measurement, so both paths are built behind the `LinAlg`
+interface:
+
+- **LAPACK `?syevd`** -- the reference implementation. It is what Python uses, so it doubles as the
+  correctness oracle for the port.
+- **Jacobi** -- the fast path.
+
+A unit test runs both over random symmetric matrices and asserts agreement, and development
+stage 4 decides which is the default. Keeping the reference path permanently is cheap and means a
+suspicious result can always be checked against LAPACK.
+
+#### Canonical sign
+
+Eigenvectors are defined only up to sign, and LAPACK and Jacobi will disagree. The features are
+unaffected, since the projection result is squared, but the *laws* are not comparable across
+implementations without a convention.
+
+Fixing one costs a single pass over `l` elements: **make the component of largest magnitude
+positive** (more stable than using the first component, which may be near zero). With this, the
+`/laws` group becomes directly comparable between the CPU and GPU backends and between C++ and
+Python, upgrading the round-trip test from "compare features" to "compare laws as well". Note that
+this removes only the *sign* ambiguity -- law **ordering** still depends on the loop order, which
+is deterministic in serial but permuted under MPI, so law-level comparison stays a serial-only
+check.
+
+#### Near-degenerate eigenvalues
+
+When the two smallest absolute eigenvalues are close, the choice between them is ill-conditioned:
+a perturbation far below the tolerance flips the selection, and the two eigenvectors are
+completely different. This is not a bug to fix but a property of the problem, and it is the most
+likely cause of a mysterious round-trip test failure.
+
+The implementation therefore **counts the windows whose two smallest absolute eigenvalues are
+within a relative gap threshold** and reports the number, and the committed fixtures are chosen to
+have no such cases. Without this, an unreproducible comparison failure would be very hard to
+diagnose.
+
+#### Row-major, column-major, and one simplification
+
+`ALT-CPP`'s TODO list carried "rethink column and row major data storage" as an open problem. Much
+of it dissolves on inspection:
+
+- LAPACK is column-major, but the input `S` is **symmetric**, so its row-major and column-major
+  representations are byte-identical. It can be passed straight through with no transpose.
+- The eigenvector output is not symmetric, but the chosen eigenvector is a *column* of `V`, which
+  in column-major storage is contiguous -- so extracting it is a straight copy of `l` values.
+
+For BLAS, the wrapper uses CBLAS with `CblasRowMajor` where available and the
+`C^T = B^T A^T` argument-swap otherwise. This is precisely the kind of thing a wrapper exists to
+settle once, so that no call site ever reasons about it again.
+
+#### The projection is a thin-k GEMM, and `M` may not fit
+
+The inner dimension is `l`, between 3 and 8, while the other two are large. Arithmetic intensity
+is therefore low and the operation is **bandwidth-bound, not compute-bound**, which means the
+choice of BLAS vendor will matter far less here than one might expect.
+
+The more serious consequence is size. For the running example of roughly 500k laws over two
+classes and a test instance yielding `nol_tilde` of a few hundred, `M` for one class is about
+`500 x 250000` values -- a gigabyte, for a single instance. Python materialises it because its
+problems have been small enough. That will not scale.
+
+**The fix is to nest the loops correctly, and then there is no memory problem at all.** The
+quantile reduces along the law axis *independently for each row*: row `i` needs every value of row
+`i` and nothing from any other row. So the rows are independent, and the blocking goes over the
+**row** axis, not the law axis:
+
+```
+for each class c, channel j:
+    for each block of B rows:
+        M_blk = data[rows] * P[:, laws of class c]   # B x n_laws_c, one GEMM
+        square in place
+        for each row: exact quantile, accumulate the statistic over rows
+```
+
+Peak memory is `B * n_laws_c * sizeof(Real)`, so `B` is a tuning knob for cache behaviour and GEMM
+efficiency rather than a feasibility constraint. In the example a single row is 2 MB and `B = 64`
+is 128 MB. The GEMM re-reads `P` once per block, but `P` is only about 16 MB: re-reading the
+*small* operand to avoid materialising the *large* result is the right trade.
+
+The per-row quantile uses **`std::nth_element`, not a sort**. Torch's linear interpolation needs
+the order statistics at `floor((n-1)q)` and the next one, which is one `nth_element` plus a
+`min_element` over the upper partition -- `O(n)` against `O(n log n)`. For several quantiles, sort
+them ascending and partition left to right, each call restricted to the sub-range left by the
+previous one. **The interpolation convention must match torch exactly**, or the round-trip test
+produces small unexplained disagreements.
+
+#### Selection when a row is not in one place
+
+Row-blocking fails in exactly one situation: when a single row's values are **distributed across
+ranks**, which happens only if the laws ever stop being replicated
+(see [Parallel decomposition](#parallel-decomposition)). Then no rank can call `nth_element` on a
+whole row, and selection has to be done without gathering.
+
+The standard answer is **two-pass histogram selection**. To find the value at rank `r` among `N`
+values: partition the value range into `B` buckets and have every rank histogram its local share,
+then `MPI_Allreduce` the `B` counters -- reducing the whole dataset to `B` numbers. The cumulative
+counts identify the bucket containing rank `r`, and how many values `C` lie strictly below it. A
+second pass keeps only values inside that bucket, roughly `N/B` of them, which are then either
+gathered for an exact `nth_element` of the `(r - C)`-th smallest, or recursed on. With `B = 1024`
+this converges in two or three passes, and the data is never materialised -- only counters are.
+
+The variant worth implementing is **radix select on the bit patterns**, for two reasons specific
+to this algorithm:
+
+- The values are `M`-squared and therefore **non-negative**, and for non-negative IEEE-754 floats
+  the bit pattern read as an unsigned integer orders identically to the float. So the histogram
+  can be taken directly on bit patterns: no min/max pre-pass, no floating-point bucket boundaries,
+  and the result is **exact** rather than interpolated.
+- The [no-NaN policy](#numerical-policy-nan-is-not-a-legal-value) is what makes this safe, since
+  NaN is the one bit pattern that breaks the monotonic mapping.
+
+This is not purely a contingency. `nth_element` suits a CPU and suits a GPU badly, whereas radix
+select is the standard GPU selection primitive, so the HIP backend is likely to want it
+regardless. CPU uses `nth_element`, GPU uses radix select, both exact, and the cross-backend diff
+stays meaningful.
+
+#### Threading: parallelism at one level only
+
+BLAS libraries thread internally. Calling a threaded BLAS from inside an OpenMP parallel region
+oversubscribes the machine, and for the tiny GEMMs here it is pure loss. The rule is that
+**OpenMP parallelises over windows and instances, and BLAS runs single-threaded** beneath it,
+enforced in code rather than left to environment variables.
+
+One specific landmine: OpenBLAS ships in pthread, OpenMP and serial builds, and the pthread build
+is known to deadlock or degrade badly when called from OpenMP regions. Ubuntu exposes these as
+`libopenblas-{pthread,openmp,serial}-dev`. The images must select deliberately rather than take
+whatever the alternatives system points at.
+
+#### Shape of the wrapper
+
+The plan says "wrapper classes". For BLAS that is the wrong shape: the operations are stateless,
+so a class with no members is a namespace with extra syntax. The wrapper is a namespace of free
+function templates with `float`/`double` specialisations selecting `s`/`d` routines -- the one
+genuinely templated component identified under [Scalar type](#scalar-type).
+
+A class is justified in exactly one place: the LAPACK reference path needs a workspace, and
+allocating it per call would reintroduce the overhead the design is trying to avoid. That becomes
+a small `SymEigenSolver` object holding a reusable per-thread workspace. The Jacobi path needs no
+workspace at all.
+
 
 ### Other development choices
 
@@ -722,8 +1060,204 @@ Consequence for the tests: the comparison tolerance is a function of the build c
 the fixtures take a tolerance parameter instead of a hardcoded epsilon. The proposed values are a
 relative tolerance of `1e-10` for `double` and `1e-4` for `float`.
 
+## Numerical policy: NaN is not a legal value
+
+The Python implementation uses NaN as ordinary control flow: as an "unfilled" sentinel in
+`P_classes`, and as a signal that a statistic could not be computed, in which case it substitutes
+zeros. The C++ implementation **forbids NaN entirely**. It is rejected at the boundary and
+prevented at every point where it could be created, so no `isnan` test is needed in the pipeline.
+
+This requires a decision at each of the places where the Python version currently produces one:
+
+| Source of NaN in Python                                     | C++ behaviour                                      |
+| ----------------------------------------------------------- | -------------------------------------------------- |
+| Non-finite values in the input data                          | **Rejected on load**, see below                     |
+| `P_classes` initialised to NaN, compacted later              | Explicit validity flags, compacted; no sentinel     |
+| Eigendecomposition failed (`_LinAlgError`)                   | The law is not stored; failures counted and reported|
+| `excess_kurtosis`: `fourth_moment / variance**2` with zero variance | Tested **before** dividing, result defined as 0 |
+| `var` over a single sample (`n - 1 == 0`)                    | Tested before dividing, result defined as 0         |
+| `nth_moment` overflow for large `n`                          | Detected as non-finite and reported as an error     |
+
+**Input validation is the most valuable part of this.** Real time series datasets contain missing
+values, and the Python implementation propagates them silently: one NaN in one channel yields a
+feature vector of NaNs, which a downstream classifier will happily consume. The C++ reader scans
+for non-finite values on load and fails with the instance, channel and time index. A
+`--on-nonfinite=error|drop-instance` switch can relax this later; the default is `error`.
+
+The invariant is kept honest by an `assert_all_finite()` check after each stage, active in debug
+builds and compiled out in release. It is a debugging aid, not the enforcement -- the enforcement
+is that no operation can create a NaN in the first place.
+
+### Deliberate divergences from Python
+
+Two of these are behaviour changes, not just refactorings, and the cross-language round-trip test
+has to account for them:
+
+1. **Input containing NaN**: Python returns NaN features, C++ refuses to run. There is no
+   agreeing answer, so the fixtures must be NaN-free -- which they are, being synthetic.
+2. **Zero variance**: Python's `excess_kurtosis` and `var` check `isnan().any()` and then return
+   `zeros_like(...)`, zeroing **the entire tensor** when any single element is NaN. C++ handles
+   each element independently, so where Python zeroes a whole vector, C++ zeroes only the
+   degenerate entries. This is arguably a bug in the Python implementation; if a fixture ever
+   triggers it the two will disagree, and the right fix is to correct the Python side rather than
+   to reproduce the behaviour.
+
+The fixtures should include a case that *approaches* the degenerate condition -- a constant time
+series, which drives the variance to zero -- so that the divergence is exercised deliberately
+rather than discovered later.
+
 ## CMake
 For compiling the code CMake will be used.
+
+`cmake_minimum_required(VERSION 3.25)`. That is the floor for preset schema 6 and for mature
+first-class HIP language support, and Ubuntu 24.04 ships 3.28, so it costs nothing.
+
+### Everything is target-scoped
+
+`ALT-CPP` used directory-scoped commands -- `link_libraries(${BLAS_LIBRARIES})`,
+`include_directories(...)`, `add_definitions(-DINTEL_MKL)` -- which apply to every target created
+afterwards, including the tests and any future tool. The replacement rule is that **nothing is
+directory-scoped**: every include directory, definition and link is attached to a target with
+`target_*` and an explicit `PUBLIC`/`PRIVATE`/`INTERFACE` keyword.
+
+Cross-cutting concerns become `INTERFACE` targets that other targets link:
+
+| Target             | Carries                                                     |
+| ------------------ | ----------------------------------------------------------- |
+| `altx_warnings`    | the warning set, and `-Werror` when `ALTX_WERROR` is on      |
+| `altx_sanitizers`  | the ASan/UBSan/TSan flags, empty when disabled               |
+| `altx_coverage`    | the gcov flags, empty when disabled                          |
+| `altx_hop`         | HOP's include directories, `HOP_TARGET_*`, and the `-x` flag |
+
+### Options
+
+```
+ALTX_ENABLE_OPENMP    ON            ALTX_SCALAR         double | float
+ALTX_ENABLE_MPI       OFF           ALTX_BLAS_VENDOR    OpenBLAS | MKL | AOCL
+ALTX_ENABLE_HIP       OFF           ALTX_SANITIZERS     "" | address,undefined | thread
+ALTX_ENABLE_TESTS     ON            ALTX_WERROR         OFF (on in CI)
+ALTX_ENABLE_COVERAGE  OFF           ALTX_NATIVE_ARCH    OFF
+```
+
+The options are orthogonal by construction, and an unsupported combination must **fail at
+configure time with a readable message** rather than produce a subtly wrong build --
+`ALTX_ENABLE_HIP=ON` without a HIP compiler being the obvious case.
+
+### One library, conditional sources
+
+`ALT-CPP` declared `SOURCES` and `PARALLEL_SOURCES` as two identical lists and built `alt_lib` and
+`alt_parallel_lib` from them. That is the duplication that
+[Two orthogonal axes](#two-orthogonal-axes-not-three-versions) exists to prevent, and CMake is
+where it either happens or does not.
+
+There is **one** `altx_core` target. MPI and HIP add *files*, never copies:
+
+```cmake
+add_library(altx_core STATIC ${ALWAYS_COMPILED_SOURCES})
+if(ALTX_ENABLE_MPI)
+    target_sources(altx_core PRIVATE src/dist/MpiComm.cpp)
+endif()
+if(ALTX_ENABLE_HIP)
+    target_sources(altx_core PRIVATE src/backend/hip/HipBackend.hip.cpp)
+endif()
+```
+
+`SerialComm.cpp` and `CpuBackend.cpp` are always compiled. This is the two-axis design expressed
+as a build file, and it is the single most important thing in this section.
+
+### How one image gets two binaries
+
+`runtime-cpu` ships `altx-serial` and `altx-omp`. These differ in `ALTX_ENABLE_OPENMP`, which is a
+configure-time option, so they cannot come from one build directory. They come from **two preset
+builds in the Docker builder stage**, whose outputs are both copied into the runtime image:
+
+```
+cmake --preset cpu-serial-release && cmake --build --preset cpu-serial-release
+cmake --preset cpu-omp-release    && cmake --build --preset cpu-omp-release
+```
+
+This is why the preset table and the image table are one artifact: a preset is the unit of build,
+an image is a set of preset outputs.
+
+### Dependencies
+
+`find_package` with imported targets throughout -- `BLAS::BLAS`, `LAPACK::LAPACK`,
+`MPI::MPI_CXX`, `OpenMP::OpenMP_CXX`, `HDF5::HDF5`. BLAS vendor selection goes through
+`BLA_VENDOR` rather than the hardcoded `/opt/intel/oneapi/...` paths and manual
+`-Wl,--start-group` lists of `ALT-CPP`. HDF5 selects its flavour with
+`set(HDF5_PREFER_PARALLEL ${ALTX_ENABLE_MPI})` before the `find_package`, using the C API as the
+plan requires.
+
+> The elaborate RPATH handling in `ALT-CPP` -- `CMAKE_BUILD_WITH_INSTALL_RPATH`, and explicitly
+> removing `$ENV{CONDA_PREFIX}/lib` from the RPATH -- existed because a conda installation was
+> polluting the library search path. Inside the container there is no conda, so **all of it can be
+> deleted**. This is a concrete, immediate payoff from building in Docker.
+
+`argparse`, HOP and GoogleTest come through `FetchContent`, pinned to **commit hashes rather than
+tags**, since a tag can be moved. To keep CI and offline builds from depending on the network,
+the development image pre-populates `FETCHCONTENT_BASE_DIR`, so a configure inside the image
+resolves them locally.
+
+### Three compiler-flag decisions
+
+1. **`-march=native` must default to OFF.** `ALT-CPP` had it unconditionally in
+   `CMAKE_CXX_FLAGS_RELEASE`. That was safe when the binary was built and run on one workstation.
+   It is *not* safe now: an image built on a GitHub runner and run anywhere else will die with an
+   illegal instruction on the first AVX-512 path the runner happened to support. It becomes
+   `ALTX_NATIVE_ARCH`, off for images, on for local benchmarking in stage 4.
+2. **`-ffast-math` is forbidden, and the reason must be written down.** Two independent reasons,
+   both of which survive the [no-NaN policy](#numerical-policy-nan-is-not-a-legal-value):
+   - `-ffinite-math-only` lets the compiler assume no NaN or infinity can occur, and therefore
+     **deletes the validation that enforces the policy**: the input scan and every
+     `assert_all_finite()` fold to constant false. Banning NaN as a value makes the checks that
+     detect it *more* load-bearing, not less, because they are now the only thing standing between
+     a malformed input and silently plausible wrong numbers. Overflow to infinity in the higher
+     moments also remains possible regardless of the policy.
+   - `-fassociative-math` reorders floating-point operations, so results become a function of the
+     optimisation level and of whether a loop vectorised. That breaks both comparisons the test
+     strategy is built on: the cross-language round trip against the Python fixtures and the
+     cross-backend CPU/GPU diff.
+3. **`-Werror` in CI only.** A permanently fatal warning is hostile mid-refactor, but a warning
+   nobody must fix is decoration. `ALTX_WERROR` defaults off and the CI presets turn it on.
+
+### The version header and provenance
+
+The output file records the full git hash, so a **stale** hash is not cosmetic -- it mislabels
+results. Generating `Version.hpp` with `configure_file` at configure time is therefore not
+sufficient: every commit after the configure would silently write the wrong hash. It is generated
+at **build** time by a custom target that runs `git describe --tags --dirty --always` and writes
+the header only when the content changes, so it is both correct and does not force a rebuild on
+every invocation.
+
+`--dirty` matters: a build from a modified working tree gets a hash marked as such, so results
+that cannot be reproduced from any commit are visibly labelled instead of appearing trustworthy.
+
+### HIP
+
+`enable_language(HIP)` is called only under `ALTX_ENABLE_HIP`, with `CMAKE_HIP_ARCHITECTURES` set
+from a cache variable. Because the same `.hip.cpp` source is compiled either as HIP or, through
+HOP, as CUDA, the language and flags for that file are applied by a helper function rather than
+inline, keeping the choice in one place. See [NVIDIA support via HOP](#nvidia-support-via-hop).
+
+### Testing and presets
+
+`gtest_discover_tests` registers the tests with `LABELS` matching the CI selection: `unit`,
+`integration`, `mpi`, `gpu`, `slow`. MPI tests are registered through `mpiexec` wrappers so they
+are ordinary CTest entries.
+
+`CMakePresets.json` is committed and holds the matrix from
+[Presets map one-to-one onto images](#presets-map-one-to-one-onto-images), built by inheritance
+from a common base rather than repeating cache variables. `CMakeUserPresets.json` is for personal
+configurations and belongs in `.gitignore`. Every preset sets
+`CMAKE_EXPORT_COMPILE_COMMANDS=ON`; a committed `.clangd` points at one build directory so that
+clangd works without symlinking the compilation database into the source root.
+
+### Install
+
+Only the executables: `install(TARGETS altx-... RUNTIME DESTINATION bin)`. Because the deliverable
+is a CLI tool, there is no header installation, no library installation and no export set --
+`ALT-CPP`'s `install(DIRECTORY ... FILES_MATCHING PATTERN "*.hpp")` is deliberately not carried
+over.
 
 ## Google Tests
 For the testing Google Tests will be used. There should be both unit tests and integration tests. Experimenting with test driven development might also be employed.
