@@ -1,0 +1,107 @@
+name: Build one image
+description: Build, tag and push one image from the docker/images.yaml plan.
+
+inputs:
+  image:
+    description: One image record from `images.py plan`, as JSON.
+    required: true
+  push:
+    description: "'true' to publish to GHCR, 'false' to build only."
+    required: true
+  token:
+    description: GHCR token. A composite action has no `secrets` context, so it
+      must be passed in.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: docker/setup-buildx-action@v3
+
+    # Needed before the existence check as well as before the push: the
+    # packages are private, and the parent image is pulled by `FROM`.
+    - uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.token }}
+
+    - id: tags
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        # On a pull_request event `github.sha` is the merge commit, which exists
+        # in no one's clone. The head sha is the one worth recording.
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        set -euo pipefail
+        repo=$(jq -r .repo <<<"$IMAGE")
+        {
+          echo "list<<TAGS"
+          echo "$repo:$(jq -r .tag <<<"$IMAGE")"          # hash-…, immutable, what CI pins
+          echo "$repo:sha-${HEAD_SHA:0:12}"               # debugging a specific build
+          # Moving tags only on the default branch and on releases. A pull
+          # request must never move `edge` -- that is the drift the layered
+          # build exists to prevent.
+          [[ "$GITHUB_REF" == refs/heads/main ]] && echo "$repo:$(jq -r .moving_tag <<<"$IMAGE")"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "$repo:${GITHUB_REF#refs/tags/}"
+            echo "$repo:latest"
+          fi
+          echo TAGS
+        } >> "$GITHUB_OUTPUT"
+
+    - id: check
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+      run: |
+        set -euo pipefail
+        ref=$(jq -r .ref <<<"$IMAGE")
+        if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Skipping build::$ref already exists"
+        else
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - id: build
+      if: steps.check.outputs.exists == 'false'
+      uses: docker/build-push-action@v6
+      with:
+        context: ${{ fromJson(inputs.image).context }}
+        file: ${{ fromJson(inputs.image).dockerfile }}
+        platforms: ${{ fromJson(inputs.image).platforms }}
+        push: ${{ inputs.push == 'true' }}
+        load: ${{ inputs.push != 'true' }}
+        tags: ${{ steps.tags.outputs.list }}
+        build-args: |
+          ${{ fromJson(inputs.image).build_args }}
+        # This label is what links the GHCR package to the repository, which is
+        # in turn what lets GITHUB_TOKEN write and later delete it.
+        labels: |
+          org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          org.opencontainers.image.revision=${{ github.sha }}
+        cache-from: type=registry,ref=${{ fromJson(inputs.image).cache_ref }}
+        cache-to: ${{ inputs.push == 'true'
+                   && format('type=registry,ref={0},mode=max', fromJson(inputs.image).cache_ref)
+                   || '' }}
+        provenance: false
+
+    # A skipped build still has to move `edge` / `latest`, or a merge that
+    # changes nothing under docker/ leaves them pointing at an older manifest.
+    # `imagetools create` writes a tag against an existing manifest: no pull,
+    # no push, no layer transfer.
+    - if: steps.check.outputs.exists == 'true' && inputs.push == 'true'
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        TAGS: ${{ steps.tags.outputs.list }}
+      run: |
+        set -euo pipefail
+        ref=$(jq -r .ref <<<"$IMAGE")
+        while read -r tag; do
+          [[ -z "$tag" || "$tag" == "$ref" ]] && continue
+          echo "retag $tag -> $ref"
+          docker buildx imagetools create -t "$tag" "$ref"
+        done <<<"$TAGS"
