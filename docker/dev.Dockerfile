@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=ghcr.io/halmosb/altx-cpp/base-cpu:edge
+ARG BASE_IMAGE=ghcr.io/intensivedatacomp/altx-cpp/base-cpu:edge
 FROM ${BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive

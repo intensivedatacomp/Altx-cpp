@@ -1,5 +1,5 @@
-ARG DEV_IMAGE=ghcr.io/halmosb/altx-cpp/dev-cpu:edge
-ARG BASE_IMAGE=ghcr.io/halmosb/altx-cpp/base-cpu:edge
+ARG DEV_IMAGE=ghcr.io/intensivedatacomp/altx-cpp/dev-cpu:edge
+ARG BASE_IMAGE=ghcr.io/intensivedatacomp/altx-cpp/base-cpu:edge
 
 FROM ${DEV_IMAGE} AS builder
 WORKDIR /src

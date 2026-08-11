@@ -11,7 +11,9 @@
 #
 # To add an image: add an entry under `images`. Its position in the build chain
 # follows from `parents`, so there is no layer number to keep in sync. The only
-# limit is depth: the workflow has one job per tier and currently defines three.
+# limit is depth: the workflow has one job per tier, and `MAX_TIERS` in
+# scripts/ci/images.py must equal the number of tier jobs written there. It is
+# currently 2 (base -> dev); adding runtime makes it 3.
 
 schema_version: 1
 
@@ -20,7 +22,7 @@ registry: ghcr.io
 # Owner and repository are taken from $GITHUB_REPOSITORY when it is set, and
 # from this fallback otherwise (local builds, where there is no such variable).
 # Lowercased before use: GHCR rejects uppercase path components.
-repository: halmosb/Altx-cpp
+repository: intensivedatacomp/Altx-cpp
 
 defaults:
   context: .            # every image is built from the repository root
