@@ -1,0 +1,81 @@
+name: Build Docker images
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      images:    ${{ steps.plan.outputs.images }}     # name -> full record
+      retention: ${{ steps.plan.outputs.retention }}
+      tier0:     ${{ steps.plan.outputs.tier0 }}
+      tier1:     ${{ steps.plan.outputs.tier1 }}
+      push:      ${{ steps.mode.outputs.push }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet pyyaml
+      - id: plan
+        run: python3 scripts/ci/images.py plan --github-output
+      - id: mode
+        run: |
+          # A fork PR's GITHUB_TOKEN is downgraded to packages:read.
+          echo "push=${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}" >> "$GITHUB_OUTPUT"
+
+  tier0:
+    needs: prepare
+    if: needs.prepare.outputs.tier0 != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJson(needs.prepare.outputs.tier0) }}
+    name: ${{ matrix.image.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-image
+        with:
+          image: ${{ toJson(matrix.image) }}
+          push:  ${{ needs.prepare.outputs.push }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  tier1:
+    needs: [prepare, tier0]
+    # `!cancelled()` is what keeps this eligible when tier0 was skipped for
+    # having no images; without it a skipped dependency skips the dependent.
+    if: ${{ !cancelled() && needs.tier0.result != 'failure' && needs.prepare.outputs.tier1 != '[]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJson(needs.prepare.outputs.tier1) }}
+    name: ${{ matrix.image.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-image
+        with:
+          image: ${{ toJson(matrix.image) }}
+          push:  ${{ needs.prepare.outputs.push }}
+          token: ${{ secrets.GITHUB_TOKEN }}

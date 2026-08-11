@@ -1,0 +1,170 @@
+# Image matrix: the single description of what is built, from what, and how.
+#
+# Consumed by two things, deliberately:
+#   * scripts/ci/images.py  -- resolves this file into tags, build arguments and
+#                              a CI job matrix
+#   * .github/workflows/    -- which contains no image names at all
+#   * scripts/build_docker_images_locally.sh
+#
+# so that CI is a second consumer of the description rather than its owner. An
+# image that only CI knows how to build is an image that stops building locally.
+#
+# To add an image: add an entry under `images`. Its position in the build chain
+# follows from `parents`, so there is no layer number to keep in sync. The only
+# limit is depth: the workflow has one job per tier and currently defines three.
+
+schema_version: 1
+
+registry: ghcr.io
+
+# Owner and repository are taken from $GITHUB_REPOSITORY when it is set, and
+# from this fallback otherwise (local builds, where there is no such variable).
+# Lowercased before use: GHCR rejects uppercase path components.
+repository: halmosb/Altx-cpp
+
+defaults:
+  context: .            # every image is built from the repository root
+  platforms: [linux/amd64]
+  cache: true           # registry-backed buildx cache, one ref per image
+  trivy:
+    severity: [CRITICAL, HIGH]
+    fail: false         # report-only unless an image says otherwise
+
+# ---------------------------------------------------------------------------
+# Images
+# ---------------------------------------------------------------------------
+#
+# Per-image keys:
+#
+#   enabled     Built at all. The plan rolls the matrix out in stages; a
+#               disabled entry documents the target without costing CI time.
+#   dockerfile  Path, relative to the repository root.
+#   parents     build-arg name -> image key. Establishes both the build order
+#               and the content-hash dependency: a parent that changes changes
+#               every descendant's hash.
+#   inputs      Everything else the image content depends on, as globs. The
+#               Dockerfile is always included automatically and does not need
+#               listing. Anything not listed here is invisible to the hash, so
+#               a missing entry means "never rebuilt" -- the resolver therefore
+#               fails on a glob that matches no file.
+#   build_args  Static build arguments. Part of the hash.
+#   trivy       Overrides defaults.trivy.
+#   moving_tag  The human-facing tag refreshed on a push to the default branch.
+#
+# Note what is NOT listed as an input: the pinned base-image digests, the apt
+# package list and the pinned uv / vim-plug versions. They are literal text
+# inside the Dockerfiles, so hashing the Dockerfile already covers them.
+
+images:
+  base-cpu:
+    enabled: true
+    dockerfile: docker/base.Dockerfile
+    build_args:
+      FLAVOR: cpu
+    moving_tag: edge
+
+  dev-cpu:
+    enabled: true
+    dockerfile: docker/dev.Dockerfile
+    parents:
+      BASE_IMAGE: base-cpu
+    inputs:
+      - docker/vim/**
+    moving_tag: edge
+
+  runtime-cpu:
+    # Stage 2. Nothing to compile until CMakeLists.txt exists.
+    enabled: false
+    dockerfile: docker/runtime.Dockerfile
+    parents:
+      DEV_IMAGE: dev-cpu
+      BASE_IMAGE: base-cpu
+    inputs:
+      - CMakeLists.txt
+      - CMakePresets.json
+      - cmake/**
+      - src/**
+      - apps/**
+      - external/**
+    trivy:
+      fail: true        # runtime images gate on HIGH/CRITICAL, dev images do not
+    moving_tag: edge
+
+  runtime-cpu-mpi:
+    # Stage 5. Provisional: built against the distribution OpenMPI, since the
+    # MPI flavour of the target cluster is unknown.
+    enabled: false
+    dockerfile: docker/runtime.Dockerfile
+    parents:
+      DEV_IMAGE: dev-cpu
+      BASE_IMAGE: base-cpu
+    build_args:
+      PRESETS: cpu-mpi-release cpu-omp-mpi-release
+    inputs:
+      - CMakeLists.txt
+      - CMakePresets.json
+      - cmake/**
+      - src/**
+      - apps/**
+      - external/**
+    trivy:
+      fail: true
+    moving_tag: edge
+
+  dev-gpu:
+    # Stage 6, and only if AMD hardware is available.
+    enabled: false
+    dockerfile: docker/dev.Dockerfile
+    parents:
+      BASE_IMAGE: base-gpu
+    inputs:
+      - docker/vim/**
+    moving_tag: edge
+
+  base-gpu:
+    enabled: false
+    dockerfile: docker/base.Dockerfile
+    build_args:
+      FLAVOR: gpu
+    moving_tag: edge
+
+  runtime-gpu:
+    enabled: false
+    dockerfile: docker/runtime.Dockerfile
+    parents:
+      DEV_IMAGE: dev-gpu
+      BASE_IMAGE: base-gpu
+    inputs:
+      - CMakeLists.txt
+      - CMakePresets.json
+      - cmake/**
+      - src/**
+      - apps/**
+      - external/**
+    trivy:
+      fail: true
+    moving_tag: edge
+
+# ---------------------------------------------------------------------------
+# Retention
+# ---------------------------------------------------------------------------
+#
+# Deletion happens when a new content hash is published, not on a schedule: the
+# single-writer `prune` job runs at the end of every successful image build and
+# removes what that build superseded. Two rules keep this from deleting
+# something still in use:
+#
+#   * a package version is protected if ANY of its tags matches `protect`. A
+#     version is a manifest, not a tag, so `v1.2.3` and `hash-abc123` can be the
+#     same object -- deleting "the old hash" would then delete the release.
+#   * `keep` versions survive beyond that. A pull request opened before a
+#     `main` merge still refers to the previous hash and must keep resolving
+#     until it is rebased; `keep` is the width of that window, not decoration.
+
+retention:
+  protect:
+    - '^v\d+\.\d+\.\d+$'    # releases, never deleted
+    - '^latest$'
+    - '^edge$'
+  keep: 5                   # superseded hash-/sha- versions kept per package
+  delete_untagged: true     # GHCR accumulates these forever otherwise
