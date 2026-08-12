@@ -525,15 +525,31 @@ separate Trivy category in the Security tab, a `latest` that means something per
 most usefully -- it makes registry cleanup a generic per-package rule instead of the
 variant-prefix regular expression that `docker-builder`'s `finalize` job has to maintain.
 
-| Tag               | Written on                       | Mutable | Audience                     |
-| ----------------- | -------------------------------- | ------- | ---------------------------- |
-| `vX.Y.Z`          | push of git tag `v*`             | no      | releases, reproducibility    |
-| `latest`          | push of git tag `v*`             | yes     | humans, "give me the release"|
-| `edge`            | push to `main`                   | yes     | **humans: newest dev image** |
-| `sha-<short>`     | every build                      | no      | debugging a specific build   |
-| `hash-<content>`  | when the image inputs change     | no      | **CI jobs**                  |
+**Plus one shared package for the machine-facing tags.** A per-flavour package is the right home
+for the three tags a person might type and the wrong home for the churn: `sha-…` accumulates one
+version per commit and `hash-…` one per change to the image inputs, which within a few weeks
+buries `edge` under a page of hex. Those go to a single `buildcache` package instead, alongside the
+buildx registry cache they are conceptually part of:
 
-The last two rows are the point:
+| Package                             | Tags                                              | Read by |
+| ----------------------------------- | ------------------------------------------------- | ------- |
+| `altx-cpp/base-cpu`, `altx-cpp/dev-cpu`, … | `vX.Y.Z`, `latest`, `edge`                  | people  |
+| `altx-cpp/buildcache`               | `<name>-hash-…`, `<name>-sha-…`, `<name>-cache`   | CI      |
+
+Every tag in the shared package is prefixed with the image name, because tags are unique per
+package and a bare `hash-abc123` could not distinguish `base-cpu` from `dev-cpu`. The prefix is
+generated in `scripts/ci/images.py`; nothing else constructs a reference.
+
+| Tag                       | Package    | Written on                   | Mutable | Audience                     |
+| ------------------------- | ---------- | ---------------------------- | ------- | ---------------------------- |
+| `vX.Y.Z`                  | per image  | push of git tag `v*`         | no      | releases, reproducibility    |
+| `latest`                  | per image  | push of git tag `v*`         | yes     | humans, "give me the release"|
+| `edge`                    | per image  | push to `main`               | yes     | **humans: newest dev image** |
+| `<name>-sha-<short>`      | buildcache | every build                  | no      | debugging a specific build   |
+| `<name>-hash-<content>`   | buildcache | when the image inputs change | no      | **CI jobs**                  |
+| `<name>-cache`            | buildcache | every build that pushes      | yes     | buildx, `type=registry`      |
+
+The last rows are the point:
 
 - **`edge` answers "I want the most recent development image."** `docker pull …/dev-cpu:edge` is
   the everyday command, and a `main` build refreshes it.
@@ -542,14 +558,26 @@ The last two rows are the point:
   The workflow computes the hash, asks the registry whether that tag exists, and **skips the build
   entirely if it does**. A dev image build is minutes; a per-commit rebuild would dominate CI.
 
-These do not conflict: the same build pushes `edge`, `sha-…` and `hash-…` at once, which costs
-nothing because they are all one manifest. Humans follow the moving tag, CI pins the immutable
-one. CI must never reference `edge` or `latest` -- that is exactly the drift the layered build
-structure exists to prevent.
+These do not conflict: the same build writes all of its tags at once, which costs nothing because
+they are one manifest -- and cross-package tagging on a skipped build is a registry-side blob
+mount, so it costs nothing either. Humans follow the moving tag, CI pins the immutable one. CI
+must never reference `edge` or `latest` -- that is exactly the drift the layered build structure
+exists to prevent, and with the split it is now also structurally awkward to get wrong: the
+package CI reads has no moving tag in it, and the package humans read has no hash in it.
+
+The build arguments follow the same rule. `dev.Dockerfile` carries
+`ARG BASE_IMAGE=…/base-cpu:edge` as a convenience default for a hand-run `docker build`, but CI
+always passes `--build-arg BASE_IMAGE=…/buildcache:base-cpu-hash-<digest>` explicitly, so the
+default is never what a published image is built from.
 
 Release builds additionally **pin by digest** (`@sha256:…`).
 
 ### Registry hygiene
+
+**Not yet implemented.** The policy lives in the `retention:` block of `docker/images.yaml`; no
+workflow reads it yet. What the package split above buys is that enforcement, when it arrives,
+only ever has to touch **one** package: everything in `buildcache` is disposable by construction,
+and the per-image packages contain nothing that may be deleted at all.
 
 Copied from `docker-builder`: a **single-writer `finalize` job** performs deletions, so parallel
 matrix jobs cannot race each other. Beyond that:
@@ -557,6 +585,15 @@ matrix jobs cannot race each other. Beyond that:
 - A scheduled weekly workflow prunes untagged versions, which GHCR otherwise accumulates forever.
 - `hash-…` tags are garbage: prune those not referenced by any workflow file, older than 90 days.
 - `sha-…` tags are pruned after 30 days. `vX.Y.Z` tags are never deleted.
+- `<name>-cache` is the live buildx cache of an image that still exists, and is protected.
+
+The one trap to respect: a package *version* is a manifest, not a tag, and one manifest can carry
+several tags. Inside `buildcache`, `dev-cpu-hash-<digest>` and `dev-cpu-sha-<commit>` are the same
+version whenever that commit is the one that last changed the image -- so a rule that expires
+`sha-…` tags by age deletes the current hash along with them, and every build that depends on it.
+Deletion is therefore decided per **version**, keeping a version if **any** of its tags is
+protected. (The split removes the worse form of this: a release tag and a hash tag can no longer
+be the same version, because they are no longer in the same package.)
 
 > **Check before copying:** `docker-builder`'s cleanup job calls
 > `/orgs/{owner}/packages/container/…`. That endpoint is for **organisation**-owned packages. If
@@ -806,20 +843,39 @@ only one source.
 
 ### Workflows
 
-| Workflow           | Trigger                                     | Does                                                    |
-| ------------------ | ------------------------------------------- | ------------------------------------------------------- |
-| `pre-commit.yml`   | pull request, push to `main`                | the same hooks as the local pre-commit                   |
-| `dev-images.yml`   | push/PR touching `docker/**`                | build dev images if the content hash is absent; push     |
-| `build-test.yml`   | pull request, push to `main`                | the preset matrix: configure, build, `ctest`             |
-| `nightly.yml`      | schedule                                    | sanitizers, GPU build, Trivy, benchmarks                 |
-| `release.yml`      | push of git tag `v*`                        | rebuild all, version tags, Trivy gating, GitHub release  |
-| `docs.yml`         | push to `main`, git tag                     | Doxygen to GitHub Pages                                  |
-| `cleanup.yml`      | schedule, weekly                            | prune the registry                                       |
+| Workflow            | Trigger                                            | Does                                                    |
+| ------------------- | -------------------------------------------------- | ------------------------------------------------------- |
+| `pre-commit.yml`    | pull request, push to `main`                       | the same hooks as the local pre-commit                   |
+| `docker-images.yml` | push to `main` / `**docker**` / `v*`, PR, manual   | build the image matrix if the content hash is absent; push and Trivy-scan |
+| `build-test.yml`    | pull request, push to `main`                       | the preset matrix: configure, build, `ctest`             |
+| `nightly.yml`       | schedule                                           | sanitizers, GPU build, Trivy, benchmarks                 |
+| `release.yml`       | push of git tag `v*`                               | rebuild all, version tags, Trivy gating, GitHub release  |
+| `docs.yml`          | push to `main`, git tag                            | Doxygen to GitHub Pages                                  |
+| `cleanup.yml`       | schedule, weekly                                   | prune the registry                                       |
 
-`dev-images.yml` and `build-test.yml` form a dependency chain: the first outputs the
-content-addressed dev image tag, the second consumes it as a `--build-arg BASE_IMAGE`, and the
-runtime images are assembled from the compiled artefacts. This is the same layering described
-under [Build structure](#build-structure), expressed as a job DAG.
+Only `docker-images.yml` exists so far; the rest arrive with the code they test.
+
+`docker-images.yml` and `build-test.yml` form a dependency chain: the first publishes the
+content-addressed dev image tag, the second computes that same tag from the working tree and
+consumes it as a `--build-arg BASE_IMAGE`, and the runtime images are assembled from the compiled
+artefacts. This is the same layering described under [Build structure](#build-structure),
+expressed as a job DAG.
+
+**No data flows between the jobs, only ordering.** Every image reference is a pure function of the
+working tree, computed by `scripts/ci/images.py` from `docker/images.yaml`, so a job that needs
+`dev-cpu` derives its tag itself and necessarily agrees with the job that built it. This
+sidesteps the fact that the outputs of a matrix job are shared by all of its entries and overwrite
+each other. The workflow contains **no image name at all**: one job per *tier* of the parent
+graph, each with a `strategy.matrix` filled from the resolved plan, which is why adding an image
+is a `docker/images.yaml` edit and only adding a *layer* is a workflow edit.
+
+**Which branches build.** `main` and `v*` are obvious. Beyond them, any branch whose name contains
+`docker` builds and scans too, on the grounds that the branch where the images are being changed is
+exactly the branch that must not wait for a pull request to discover that a Dockerfile no longer
+builds -- and the cost is near zero, since the content-hash check skips a build whose inputs have
+not changed. Such a branch build writes only the immutable `buildcache` tags: **a branch other
+than `main` never moves `edge`**, or the layered build's guarantee that a moving tag is a
+`main` artefact would be lost.
 
 ### What runs when
 
@@ -902,7 +958,20 @@ Vulnerability scanning follows `docker-builder`: Trivy with `scanners: vuln`, SA
 the GitHub Security tab under a per-image category, `ignore-unfixed: true` and a `.trivyignore`.
 The difference is the gating, described under
 [Vulnerability scanning](#vulnerability-scanning): runtime images fail on HIGH or CRITICAL,
-development images are report-only.
+development images are report-only. Each image is scanned in its own build job -- hence the
+per-image category, without which every upload would resolve the previous image's alerts as fixed.
+
+Two details that are not obvious:
+
+- **The scan runs even when the build was skipped.** An image whose content has not changed still
+  accumulates new CVEs, and it is precisely the unchanged base image that everything else is built
+  on. Skipping the scan with the build would mean a base image is scanned once and then never
+  again.
+- **The scan targets the `hash-…` reference**, not a locally built tag, so the same step works
+  whether the image was just built, was built weeks ago, or was loaded into the runner's daemon by
+  a fork pull request that may not push. The SARIF upload is the one part that a fork cannot do:
+  its `GITHUB_TOKEN` has no `security-events: write`, so the upload is skipped there rather than
+  failing the job for a reason unrelated to the image.
 
 ### Run tests
 The tests should be run automatically and code coverage should be calculated.

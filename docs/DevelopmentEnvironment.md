@@ -22,6 +22,41 @@ inside the image.
 `runtime-*` images are produced by compiling inside `dev-*` and copying the binaries into `base-*`,
 so "builds in the dev container" and "builds in CI" are the same statement by construction.
 
+@section devenv_published Published images
+
+CI publishes to GHCR under `ghcr.io/intensivedatacomp/altx-cpp/`, split into two kinds of package.
+The one to pull from is the per-image package, which carries only tags meant to be typed:
+
+```bash
+docker pull ghcr.io/intensivedatacomp/altx-cpp/dev-cpu:edge     # newest build of main
+docker pull ghcr.io/intensivedatacomp/altx-cpp/dev-cpu:v1.2.3   # a release
+docker pull ghcr.io/intensivedatacomp/altx-cpp/dev-cpu:latest   # newest release
+```
+
+The second package, `altx-cpp/buildcache`, holds the machine-facing tags for **every** image —
+`dev-cpu-hash-<digest>` (the content-addressed tag CI pins), `dev-cpu-sha-<commit>` (one per
+build, for reproducing a specific run) and `dev-cpu-cache` (the buildx layer cache). They live
+together so the per-image packages stay readable, and each is prefixed with the image name because
+tags are unique within a package.
+
+Reach into `buildcache` only to reproduce a particular CI run. `scripts/ci/images.py` prints the
+reference for the current working tree, which is the same one CI computes:
+
+```bash
+python3 scripts/ci/images.py ref dev-cpu       # ghcr.io/…/buildcache:dev-cpu-hash-7d6016832ae9
+python3 scripts/ci/images.py plan              # the whole resolved matrix
+```
+
+Images are built on every push to `main`, on `v*` tags, on pull requests, and on any branch whose
+name contains `docker` — image work is the case where waiting for a pull request to find out that
+a Dockerfile broke is the most expensive. A build is skipped entirely when an image with the same
+content hash already exists, so most of those runs cost only the hash computation. Only `main` and
+release tags move `edge` and `latest`; a branch or pull request build never does.
+
+Every image is scanned with Trivy and the findings are uploaded to the repository's Security tab,
+one category per image. Development images are report-only; runtime images will fail the build on
+HIGH or CRITICAL findings. Suppressions go in `.trivyignore` at the repository root.
+
 @section devenv_building Building the images
 
 ```bash

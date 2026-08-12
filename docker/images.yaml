@@ -24,6 +24,19 @@ registry: ghcr.io
 # Lowercased before use: GHCR rejects uppercase path components.
 repository: intensivedatacomp/Altx-cpp
 
+# Every image publishes to two packages, split by audience:
+#
+#   <registry>/<repository>/<name>          edge, latest, vX.Y.Z
+#   <registry>/<repository>/<buildcache>    <name>-hash-…, <name>-sha-…, <name>-cache
+#
+# so the per-image packages stay readable -- one line per tag a human would
+# ever type -- while the churn of content hashes, per-commit tags and buildx
+# cache manifests collects in a single package that is disposable by
+# construction. Because that package is shared, every tag in it is prefixed
+# with the image name: tags are unique per package, so a bare `hash-abc123`
+# could not distinguish base-cpu from dev-cpu.
+buildcache_package: buildcache
+
 defaults:
   context: .            # every image is built from the repository root
   platforms: [linux/amd64]
@@ -151,22 +164,30 @@ images:
 # Retention
 # ---------------------------------------------------------------------------
 #
-# Deletion happens when a new content hash is published, not on a schedule: the
-# single-writer `prune` job runs at the end of every successful image build and
-# removes what that build superseded. Two rules keep this from deleting
-# something still in use:
+# NOT YET IMPLEMENTED -- no workflow reads this. It is kept here because the
+# policy is a property of the image matrix rather than of the job that will
+# eventually enforce it, and because the split above changes what enforcement
+# has to look like: deletion only ever touches the `buildcache` package, and
+# the per-image packages hold nothing that may be deleted at all.
+#
+# The intent is a single-writer `prune` job -- one, so that parallel matrix
+# jobs cannot race each other -- run when a new content hash is published
+# rather than on a schedule. Two rules keep it from deleting something in use:
 #
 #   * a package version is protected if ANY of its tags matches `protect`. A
-#     version is a manifest, not a tag, so `v1.2.3` and `hash-abc123` can be the
-#     same object -- deleting "the old hash" would then delete the release.
+#     version is a manifest, not a tag, so `v1.2.3` and `dev-cpu-hash-abc123`
+#     can be the same object -- deleting "the old hash" would then delete the
+#     release.
 #   * `keep` versions survive beyond that. A pull request opened before a
 #     `main` merge still refers to the previous hash and must keep resolving
 #     until it is rebased; `keep` is the width of that window, not decoration.
 
 retention:
+  package: buildcache       # the only package pruning may touch
   protect:
     - '^v\d+\.\d+\.\d+$'    # releases, never deleted
     - '^latest$'
     - '^edge$'
-  keep: 5                   # superseded hash-/sha- versions kept per package
+    - '-cache$'             # the buildx registry cache of a live image
+  keep: 5                   # superseded hash-/sha- versions kept per image
   delete_untagged: true     # GHCR accumulates these forever otherwise

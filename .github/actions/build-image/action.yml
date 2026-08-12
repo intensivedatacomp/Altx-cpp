@@ -1,5 +1,5 @@
 name: Build one image
-description: Build, tag and push one image from the docker/images.yaml plan.
+description: Build, tag, push and scan one image from the docker/images.yaml plan.
 
 inputs:
   image:
@@ -26,6 +26,15 @@ runs:
         username: ${{ github.actor }}
         password: ${{ inputs.token }}
 
+    # Two tag lists, because the two kinds of tag go to two packages.
+    #
+    #   <namespace>/buildcache   every immutable tag, for every image
+    #   <namespace>/<name>       only the tags a human would type
+    #
+    # A build always writes the first list. The second is written only where a
+    # moving tag means something: `main` and release tags. A pull request, and
+    # a build on a `*docker*` branch, must never move `edge` -- that is the
+    # drift the layered build exists to prevent.
     - id: tags
       shell: bash
       env:
@@ -36,13 +45,11 @@ runs:
       run: |
         set -euo pipefail
         repo=$(jq -r .repo <<<"$IMAGE")
+        cache_repo=$(jq -r .cache_repo <<<"$IMAGE")
         {
           echo "list<<TAGS"
-          echo "$repo:$(jq -r .tag <<<"$IMAGE")"          # hash-…, immutable, what CI pins
-          echo "$repo:sha-${HEAD_SHA:0:12}"               # debugging a specific build
-          # Moving tags only on the default branch and on releases. A pull
-          # request must never move `edge` -- that is the drift the layered
-          # build exists to prevent.
+          echo "$cache_repo:$(jq -r .tag <<<"$IMAGE")"                      # what CI pins
+          echo "$cache_repo:$(jq -r .sha_tag_prefix <<<"$IMAGE")${HEAD_SHA:0:12}"
           [[ "$GITHUB_REF" == refs/heads/main ]] && echo "$repo:$(jq -r .moving_tag <<<"$IMAGE")"
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             echo "$repo:${GITHUB_REF#refs/tags/}"
@@ -78,7 +85,8 @@ runs:
         build-args: |
           ${{ fromJson(inputs.image).build_args }}
         # This label is what links the GHCR package to the repository, which is
-        # in turn what lets GITHUB_TOKEN write and later delete it.
+        # in turn what lets GITHUB_TOKEN write and later delete it. It has to be
+        # right on `buildcache` too, which is a package like any other.
         labels: |
           org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           org.opencontainers.image.revision=${{ github.sha }}
@@ -88,10 +96,12 @@ runs:
                    || '' }}
         provenance: false
 
-    # A skipped build still has to move `edge` / `latest`, or a merge that
-    # changes nothing under docker/ leaves them pointing at an older manifest.
-    # `imagetools create` writes a tag against an existing manifest: no pull,
-    # no push, no layer transfer.
+    # A skipped build still has to write the sha- tag and move `edge` / `latest`,
+    # or a merge that changes nothing under docker/ leaves them pointing at an
+    # older manifest. `imagetools create` writes a tag against an existing
+    # manifest: no pull, no push, no layer transfer. Across packages it is a
+    # cross-repository blob mount, which is a registry-side operation for the
+    # same reason.
     - if: steps.check.outputs.exists == 'true' && inputs.push == 'true'
       shell: bash
       env:
@@ -105,3 +115,65 @@ runs:
           echo "retag $tag -> $ref"
           docker buildx imagetools create -t "$tag" "$ref"
         done <<<"$TAGS"
+
+    # ---------------------------------------------------------------------
+    # Vulnerability scan
+    # ---------------------------------------------------------------------
+    #
+    # Scanning is unconditional -- including when the build was skipped, since
+    # an image whose content has not changed still acquires new CVEs over time,
+    # and that is precisely the image everything else is built on.
+    #
+    # `ref` resolves in all three cases: pushed just now, pushed by an earlier
+    # run, or loaded into the local daemon by a no-push build (trivy checks the
+    # daemon before the registry). TRIVY_USERNAME/TRIVY_PASSWORD cover a
+    # private package, and incidentally raise the rate limit on the ghcr.io
+    # pull of trivy's own vulnerability database.
+    - name: Trivy findings (report)
+      uses: aquasecurity/trivy-action@v0.36.0
+      env:
+        TRIVY_USERNAME: ${{ github.actor }}
+        TRIVY_PASSWORD: ${{ inputs.token }}
+      with:
+        image-ref: ${{ fromJson(inputs.image).ref }}
+        format: table
+        scanners: vuln
+        vuln-type: os,library
+        severity: ${{ fromJson(inputs.image).trivy_severity }}
+        ignore-unfixed: true
+        trivyignores: .trivyignore
+        exit-code: '0'
+
+    # The gating run. `trivy_exit_code` is 1 for runtime images and 0 for
+    # development images, which carry a permanent backlog of compiler and
+    # debugger findings that would otherwise block all work.
+    - name: Trivy findings (SARIF)
+      uses: aquasecurity/trivy-action@v0.36.0
+      env:
+        TRIVY_USERNAME: ${{ github.actor }}
+        TRIVY_PASSWORD: ${{ inputs.token }}
+      with:
+        image-ref: ${{ fromJson(inputs.image).ref }}
+        format: sarif
+        output: trivy-${{ fromJson(inputs.image).name }}.sarif
+        scanners: vuln
+        vuln-type: os,library
+        severity: ${{ fromJson(inputs.image).trivy_severity }}
+        ignore-unfixed: true
+        trivyignores: .trivyignore
+        exit-code: ${{ fromJson(inputs.image).trivy_exit_code }}
+
+    # `!cancelled()`, so that the findings reach the Security tab even --
+    # especially -- on the run that the scan failed. One category per image, or
+    # each upload would resolve the previous image's alerts as fixed.
+    #
+    # The two guards after it are both about not turning one failure into two:
+    # a fork pull request's GITHUB_TOKEN has no security-events: write, and a
+    # build that failed before the scan leaves no SARIF file to upload.
+    - name: Upload SARIF
+      if: ${{ !cancelled() && inputs.push == 'true'
+              && hashFiles(format('trivy-{0}.sarif', fromJson(inputs.image).name)) != '' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: trivy-${{ fromJson(inputs.image).name }}.sarif
+        category: trivy-${{ fromJson(inputs.image).name }}

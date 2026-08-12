@@ -17,6 +17,25 @@ The hash of an image covers
 * the static ``build_args``;
 * the hash of every parent, recursively.
 
+Two destinations, not one
+-------------------------
+Every image resolves to **two** GHCR packages, because the two kinds of tag have
+different audiences and different lifetimes:
+
+``ghcr.io/<owner>/altx-cpp/<name>``
+    Human-facing only: ``edge``, ``latest``, ``vX.Y.Z``. Someone opening the
+    packages page sees a handful of meaningful tags per image.
+
+``ghcr.io/<owner>/altx-cpp/buildcache``
+    Machine-facing only: ``<name>-hash-<digest>``, ``<name>-sha-<commit>`` and
+    the buildx registry cache ``<name>-cache``. One package for every image,
+    which is why each tag carries the image name as a prefix -- tags are unique
+    per package, so ``hash-abc123`` alone could not tell ``base-cpu`` from
+    ``dev-cpu``.
+
+That split is also what makes retention simple: everything in ``buildcache`` is
+disposable by construction, and nothing outside it is ever deleted.
+
 Commands
 --------
 ``plan``        the whole resolved matrix as JSON (what the CI prepare job runs)
@@ -88,6 +107,11 @@ def namespace(config: dict) -> str:
     """``ghcr.io/<owner>/<repo>`` -- lowercased, since GHCR rejects uppercase."""
     repository = os.environ.get("GITHUB_REPOSITORY") or config["repository"]
     return f"{config['registry']}/{repository}".lower()
+
+
+def cache_repository(config: dict) -> str:
+    """The one package that holds every immutable tag and every buildx cache."""
+    return f"{namespace(config)}/{config.get('buildcache_package', 'buildcache')}"
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +212,7 @@ def tiers(config: dict, names: list[str]) -> list[list[str]]:
 
 def resolve(root: Path, config: dict) -> dict:
     prefix = namespace(config)
+    cache_repo = cache_repository(config)
     enabled = [n for n, s in config["images"].items() if s.get("enabled", False)]
     cache: dict[str, str] = {}
 
@@ -195,25 +220,32 @@ def resolve(root: Path, config: dict) -> dict:
     for name in enabled:
         spec = config["images"][name]
         digest = content_hash(root, config, name, cache)
-        repo = f"{prefix}/{name}"
 
         # Parents are referenced by their own hash tag, never by `edge` or
         # `latest`. A moving tag here is the drift the layered build exists to
         # prevent: it would make a rebuild of a child pick up a base nobody
-        # asked for.
+        # asked for. The hash tag lives in the buildcache package, so this is
+        # also the reason a `FROM` in a Dockerfile must never be the only way
+        # the parent is named -- CI always passes it explicitly.
         build_args = dict(spec.get("build_args", {}))
         for arg, parent in spec.get("parents", {}).items():
-            build_args[arg] = f"{prefix}/{parent}:hash-{content_hash(root, config, parent, cache)}"
+            parent_hash = content_hash(root, config, parent, cache)
+            build_args[arg] = f"{cache_repo}:{parent}-hash-{parent_hash}"
 
         trivy = {**config["defaults"]["trivy"], **spec.get("trivy", {})}
 
         images[name] = {
             "name": name,
-            "repo": repo,
+            # Human-readable tags only: edge, latest, vX.Y.Z.
+            "repo": f"{prefix}/{name}",
+            # Machine-readable tags only, all images sharing one package --
+            # hence the `<name>-` prefix on every tag written here.
+            "cache_repo": cache_repo,
             "hash": digest,
-            "tag": f"hash-{digest}",
-            "ref": f"{repo}:hash-{digest}",
-            "cache_ref": f"{prefix}/buildcache:{name}",
+            "tag": f"{name}-hash-{digest}",
+            "ref": f"{cache_repo}:{name}-hash-{digest}",
+            "sha_tag_prefix": f"{name}-sha-",
+            "cache_ref": f"{cache_repo}:{name}-cache",
             "dockerfile": spec["dockerfile"],
             "context": spec.get("context", config["defaults"]["context"]),
             "platforms": ",".join(spec.get("platforms", config["defaults"]["platforms"])),
@@ -229,6 +261,7 @@ def resolve(root: Path, config: dict) -> dict:
         "tiers": [[images[n] for n in tier] for tier in tiers(config, enabled)],
         "retention": config["retention"],
         "namespace": prefix,
+        "cache_repo": cache_repo,
     }
 
 
