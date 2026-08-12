@@ -575,31 +575,59 @@ Release builds additionally **pin by digest** (`@sha256:…`).
 
 ### Registry hygiene
 
-**Not yet implemented.** The policy lives in the `retention:` block of `docker/images.yaml`; no
-workflow reads it yet. What the package split above buys is that enforcement, when it arrives,
-only ever has to touch **one** package: everything in `buildcache` is disposable by construction,
-and the per-image packages contain nothing that may be deleted at all.
+The policy is the `retention:` block of `docker/images.yaml`; it is enforced by
+`scripts/ci/prune_packages.py`, run from the single-writer `prune` job at the end of
+`docker-images.yml`. Deletion happens when a build publishes, not on a schedule, and only after
+the whole matrix has succeeded: pruning against a half-built matrix expires an old image while its
+replacement does not exist. As in `docker-builder`, the job is **one** job and never a matrix
+entry -- parallel deleters each decide "this is the sixth newest, drop it" from a different
+snapshot of the same package.
 
-Copied from `docker-builder`: a **single-writer `finalize` job** performs deletions, so parallel
-matrix jobs cannot race each other. Beyond that:
+**The package split does not, on its own, keep the human packages clean**, which was the initial
+expectation and is worth correcting here rather than rediscovering. Moving a tag does not delete
+what it pointed at: every time `edge` advances, the previous manifest stays in `dev-cpu` as an
+*untagged* version. So the per-image packages do accumulate garbage -- just garbage of exactly one
+kind, which is what makes the rule for them a single line:
 
-- A scheduled weekly workflow prunes untagged versions, which GHCR otherwise accumulates forever.
-- `hash-…` tags are garbage: prune those not referenced by any workflow file, older than 90 days.
-- `sha-…` tags are pruned after 30 days. `vX.Y.Z` tags are never deleted.
-- `<name>-cache` is the live buildx cache of an image that still exists, and is protected.
+- **Per-image packages: untagged versions only.** Every tag there is one a person may have typed
+  into a Dockerfile or a job description, so nothing tagged is ever removed automatically. Nothing
+  is lost by dropping the untagged ones: the identical manifest is still in `buildcache` under its
+  `-hash-` tag, with a `-sha-` tag recording which commit built it. They are not a cache either --
+  `cache-from`/`cache-to` name only `<name>-cache`.
+- **`buildcache`: untagged versions, plus `-hash-`/`-sha-` versions beyond `keep`,** counted **per
+  image**. The tags share a package but not a lifetime; five pushes to `dev-cpu` must not evict
+  `base-cpu`'s history.
 
-The one trap to respect: a package *version* is a manifest, not a tag, and one manifest can carry
-several tags. Inside `buildcache`, `dev-cpu-hash-<digest>` and `dev-cpu-sha-<commit>` are the same
-version whenever that commit is the one that last changed the image -- so a rule that expires
-`sha-…` tags by age deletes the current hash along with them, and every build that depends on it.
-Deletion is therefore decided per **version**, keeping a version if **any** of its tags is
-protected. (The split removes the worse form of this: a release tag and a hash tag can no longer
-be the same version, because they are no longer in the same package.)
+Three rules keep this from deleting something in use.
 
-> **Check before copying:** `docker-builder`'s cleanup job calls
-> `/orgs/{owner}/packages/container/…`. That endpoint is for **organisation**-owned packages. If
-> the account is a personal one, the calls need `/user/packages/…` (delete) and
-> `/users/{owner}/packages/…` (list) instead, and the existing job may be silently failing.
+- **A version is protected if *any* of its tags is.** A package version is a manifest, not a tag,
+  and one manifest carries several: in `buildcache`, `dev-cpu-hash-<digest>` and
+  `dev-cpu-sha-<commit>` are the same version whenever that commit is the one that last changed the
+  image. An age rule over `sha-…` tags would take the current hash with them.
+- **The hash resolved from the working tree is protected unconditionally**, however old it is.
+  This is why retention is count-based rather than the age-based rule first sketched here (prune
+  `hash-…` after 90 days, `sha-…` after 30): age is the wrong axis. An image that has not changed
+  in a year is not stale, it is *current* -- `base-cpu` is expected to sit untouched for months
+  while every build depends on it. What "in use" actually means is "named by the plan", and the
+  plan is computable.
+- **Untagged versions must survive a grace window** (`grace_hours`), since a manifest is briefly
+  untagged between its push and its tag being written by a concurrent build.
+
+The split does remove the worst form of the first trap: a release tag and a hash tag can no longer
+be the same version, because they are no longer in the same package.
+
+> **Checked, not copied:** `docker-builder`'s cleanup job calls
+> `/orgs/{owner}/packages/container/…`. That endpoint is for **organisation**-owned packages and
+> returns 404 for a personal account, where listing is `/users/{owner}/packages/…` and deleting is
+> `/user/packages/…` -- the authenticated user's own packages, with no owner in the path at all.
+> A job written against the wrong pair deletes nothing while reporting success, which is the worst
+> available outcome for a cleanup job. `prune_packages.py` therefore probes `GET /orgs/{owner}`
+> once and picks the pair, so it is correct whichever the account turns out to be.
+
+The workflow's `GITHUB_TOKEN` is enough to delete, but only because the images carry
+`org.opencontainers.image.source` and are therefore linked to this repository. That label is
+already load-bearing for pushing; it is what makes the packages inherit repository access at all.
+Unlink a package and the same token stops being able to clean it up.
 
 ### Python in the images: light only, installed with uv
 
@@ -852,9 +880,11 @@ only one source.
 | `nightly.yml`       | schedule                                           | sanitizers, GPU build, Trivy, benchmarks                 |
 | `release.yml`       | push of git tag `v*`                               | rebuild all, version tags, Trivy gating, GitHub release  |
 | `docs.yml`          | push to `main`, git tag                            | Doxygen to GitHub Pages                                  |
-| `cleanup.yml`       | schedule, weekly                                   | prune the registry                                       |
 
-Only `docker-images.yml` exists so far; the rest arrive with the code they test.
+Only `docker-images.yml` exists so far; the rest arrive with the code they test. The separate
+`cleanup.yml` originally planned here is **not** wanted: registry pruning is a `prune` job inside
+`docker-images.yml`, because what a build supersedes is known exactly at the moment it publishes
+and only approximately a week later. See [Registry hygiene](#registry-hygiene).
 
 `docker-images.yml` and `build-test.yml` form a dependency chain: the first publishes the
 content-addressed dev image tag, the second computes that same tag from the working tree and
