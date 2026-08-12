@@ -1,0 +1,193 @@
+# Image matrix: the single description of what is built, from what, and how.
+#
+# Consumed by two things, deliberately:
+#   * scripts/ci/images.py  -- resolves this file into tags, build arguments and
+#                              a CI job matrix
+#   * .github/workflows/    -- which contains no image names at all
+#   * scripts/build_docker_images_locally.sh
+#
+# so that CI is a second consumer of the description rather than its owner. An
+# image that only CI knows how to build is an image that stops building locally.
+#
+# To add an image: add an entry under `images`. Its position in the build chain
+# follows from `parents`, so there is no layer number to keep in sync. The only
+# limit is depth: the workflow has one job per tier, and `MAX_TIERS` in
+# scripts/ci/images.py must equal the number of tier jobs written there. It is
+# currently 2 (base -> dev); adding runtime makes it 3.
+
+schema_version: 1
+
+registry: ghcr.io
+
+# Owner and repository are taken from $GITHUB_REPOSITORY when it is set, and
+# from this fallback otherwise (local builds, where there is no such variable).
+# Lowercased before use: GHCR rejects uppercase path components.
+repository: intensivedatacomp/Altx-cpp
+
+# Every image publishes to two packages, split by audience:
+#
+#   <registry>/<repository>/<name>          edge, latest, vX.Y.Z
+#   <registry>/<repository>/<buildcache>    <name>-hash-…, <name>-sha-…, <name>-cache
+#
+# so the per-image packages stay readable -- one line per tag a human would
+# ever type -- while the churn of content hashes, per-commit tags and buildx
+# cache manifests collects in a single package that is disposable by
+# construction. Because that package is shared, every tag in it is prefixed
+# with the image name: tags are unique per package, so a bare `hash-abc123`
+# could not distinguish base-cpu from dev-cpu.
+buildcache_package: buildcache
+
+defaults:
+  context: .            # every image is built from the repository root
+  platforms: [linux/amd64]
+  cache: true           # registry-backed buildx cache, one ref per image
+  trivy:
+    severity: [CRITICAL, HIGH]
+    fail: false         # report-only unless an image says otherwise
+
+# ---------------------------------------------------------------------------
+# Images
+# ---------------------------------------------------------------------------
+#
+# Per-image keys:
+#
+#   enabled     Built at all. The plan rolls the matrix out in stages; a
+#               disabled entry documents the target without costing CI time.
+#   dockerfile  Path, relative to the repository root.
+#   parents     build-arg name -> image key. Establishes both the build order
+#               and the content-hash dependency: a parent that changes changes
+#               every descendant's hash.
+#   inputs      Everything else the image content depends on, as globs. The
+#               Dockerfile is always included automatically and does not need
+#               listing. Anything not listed here is invisible to the hash, so
+#               a missing entry means "never rebuilt" -- the resolver therefore
+#               fails on a glob that matches no file.
+#   build_args  Static build arguments. Part of the hash.
+#   trivy       Overrides defaults.trivy.
+#   moving_tag  The human-facing tag refreshed on a push to the default branch.
+#
+# Note what is NOT listed as an input: the pinned base-image digests, the apt
+# package list and the pinned uv / vim-plug versions. They are literal text
+# inside the Dockerfiles, so hashing the Dockerfile already covers them.
+
+images:
+  base-cpu:
+    enabled: true
+    dockerfile: docker/base.Dockerfile
+    build_args:
+      FLAVOR: cpu
+    moving_tag: edge
+
+  dev-cpu:
+    enabled: true
+    dockerfile: docker/dev.Dockerfile
+    parents:
+      BASE_IMAGE: base-cpu
+    inputs:
+      - docker/vim/**
+    moving_tag: edge
+
+  runtime-cpu:
+    # Stage 2. Nothing to compile until CMakeLists.txt exists.
+    enabled: false
+    dockerfile: docker/runtime.Dockerfile
+    parents:
+      DEV_IMAGE: dev-cpu
+      BASE_IMAGE: base-cpu
+    inputs:
+      - CMakeLists.txt
+      - CMakePresets.json
+      - cmake/**
+      - src/**
+      - apps/**
+      - external/**
+    trivy:
+      fail: true        # runtime images gate on HIGH/CRITICAL, dev images do not
+    moving_tag: edge
+
+  runtime-cpu-mpi:
+    # Stage 5. Provisional: built against the distribution OpenMPI, since the
+    # MPI flavour of the target cluster is unknown.
+    enabled: false
+    dockerfile: docker/runtime.Dockerfile
+    parents:
+      DEV_IMAGE: dev-cpu
+      BASE_IMAGE: base-cpu
+    build_args:
+      PRESETS: cpu-mpi-release cpu-omp-mpi-release
+    inputs:
+      - CMakeLists.txt
+      - CMakePresets.json
+      - cmake/**
+      - src/**
+      - apps/**
+      - external/**
+    trivy:
+      fail: true
+    moving_tag: edge
+
+  dev-gpu:
+    # Stage 6, and only if AMD hardware is available.
+    enabled: false
+    dockerfile: docker/dev.Dockerfile
+    parents:
+      BASE_IMAGE: base-gpu
+    inputs:
+      - docker/vim/**
+    moving_tag: edge
+
+  base-gpu:
+    enabled: false
+    dockerfile: docker/base.Dockerfile
+    build_args:
+      FLAVOR: gpu
+    moving_tag: edge
+
+  runtime-gpu:
+    enabled: false
+    dockerfile: docker/runtime.Dockerfile
+    parents:
+      DEV_IMAGE: dev-gpu
+      BASE_IMAGE: base-gpu
+    inputs:
+      - CMakeLists.txt
+      - CMakePresets.json
+      - cmake/**
+      - src/**
+      - apps/**
+      - external/**
+    trivy:
+      fail: true
+    moving_tag: edge
+
+# ---------------------------------------------------------------------------
+# Retention
+# ---------------------------------------------------------------------------
+#
+# NOT YET IMPLEMENTED -- no workflow reads this. It is kept here because the
+# policy is a property of the image matrix rather than of the job that will
+# eventually enforce it, and because the split above changes what enforcement
+# has to look like: deletion only ever touches the `buildcache` package, and
+# the per-image packages hold nothing that may be deleted at all.
+#
+# The intent is a single-writer `prune` job -- one, so that parallel matrix
+# jobs cannot race each other -- run when a new content hash is published
+# rather than on a schedule. Two rules keep it from deleting something in use:
+#
+#   * a package version is protected if ANY of its tags matches `protect`. A
+#     version is a manifest, not a tag, so `v1.2.3` and `dev-cpu-hash-abc123`
+#     can be the same object -- deleting "the old hash" would then delete the
+#     release.
+#   * `keep` versions survive beyond that. A pull request opened before a
+#     `main` merge still refers to the previous hash and must keep resolving
+#     until it is rebased; `keep` is the width of that window, not decoration.
+
+retention:
+  package: buildcache       # the only package pruning may touch
+  protect:
+    - '^v\d+\.\d+\.\d+$'    # releases, never deleted
+    - '^latest$'
+    - '^edge$'
+    - '-cache$'             # the buildx registry cache of a live image
+  keep: 5                   # superseded hash-/sha- versions kept per image
+  delete_untagged: true     # GHCR accumulates these forever otherwise

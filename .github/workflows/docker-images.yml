@@ -1,0 +1,102 @@
+name: Build Docker images
+
+# The image set is not listed here. It comes from docker/images.yaml, resolved
+# by scripts/ci/images.py, so that a workflow edit is never needed to add an
+# image -- only to add a *layer* (see MAX_TIERS in that script).
+on:
+  push:
+    branches:
+      - main
+      # Any branch whose name contains "docker" builds and scans the images
+      # too, and refreshes `edge` with the result. Work on the images is
+      # exactly the work that must not wait for a pull request to find out
+      # whether the Dockerfiles still build, and a branch build costs nothing
+      # when the content hash already exists.
+      #
+      # `**` matches any character including `/`, so `feature/docker-x` counts.
+      # Matching is case-sensitive: name the branch `docker`, not `Docker`.
+      #
+      # This pattern is paired with the `*docker*` test in the tag step of
+      # .github/actions/build-image: this one decides what builds, that one
+      # decides what may move `edge`. Narrowing one without the other leaves
+      # either a branch that builds but publishes no readable tag, or a rule
+      # that can never fire.
+      - '**docker**'
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      images:    ${{ steps.plan.outputs.images }}     # name -> full record
+      retention: ${{ steps.plan.outputs.retention }}
+      tier0:     ${{ steps.plan.outputs.tier0 }}
+      tier1:     ${{ steps.plan.outputs.tier1 }}
+      push:      ${{ steps.mode.outputs.push }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet pyyaml
+      - id: plan
+        run: python3 scripts/ci/images.py plan --github-output
+      - id: mode
+        run: |
+          # A fork PR's GITHUB_TOKEN is downgraded to packages:read.
+          echo "push=${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}" >> "$GITHUB_OUTPUT"
+
+  tier0:
+    needs: prepare
+    if: needs.prepare.outputs.tier0 != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write    # Trivy SARIF -> the Security tab
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJson(needs.prepare.outputs.tier0) }}
+    name: ${{ matrix.image.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-image
+        with:
+          image: ${{ toJson(matrix.image) }}
+          push:  ${{ needs.prepare.outputs.push }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  tier1:
+    needs: [prepare, tier0]
+    # `!cancelled()` is what keeps this eligible when tier0 was skipped for
+    # having no images; without it a skipped dependency skips the dependent.
+    if: ${{ !cancelled() && needs.tier0.result != 'failure' && needs.prepare.outputs.tier1 != '[]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJson(needs.prepare.outputs.tier1) }}
+    name: ${{ matrix.image.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-image
+        with:
+          image: ${{ toJson(matrix.image) }}
+          push:  ${{ needs.prepare.outputs.push }}
+          token: ${{ secrets.GITHUB_TOKEN }}

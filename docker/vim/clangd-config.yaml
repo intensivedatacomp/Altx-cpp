@@ -1,0 +1,10 @@
+CompileFlags:
+  Add:
+    - -std=c++20
+    - -fopenmp
+    - -I/usr/include/hdf5/serial
+  Compiler: g++
+Index:
+  Background: Build
+Diagnostics:
+  UnusedIncludes: Strict

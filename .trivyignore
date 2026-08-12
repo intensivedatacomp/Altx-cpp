@@ -1,0 +1,17 @@
+# Vulnerabilities suppressed for the image scan in .github/workflows/docker-images.yml.
+#
+# One CVE id per line, with a comment saying *why* and when it should be
+# revisited. An entry with no expiry is a permanent exception, and there should
+# be very few of those: the scan already runs with `ignore-unfixed: true`, so
+# anything listed here is something the distribution has fixed and we have
+# chosen not to take.
+#
+# Development images (base-cpu, dev-cpu) are report-only -- a compiler,
+# debugger and profiler toolchain guarantees a permanent backlog -- so findings
+# there do not need an entry here to keep CI green. Runtime images fail the
+# build on HIGH or CRITICAL, which is where this file will start earning its
+# keep.
+#
+# Format (trivy):
+#   CVE-2023-12345
+#   CVE-2023-12345 exp:2026-01-01

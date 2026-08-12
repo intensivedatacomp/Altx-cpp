@@ -1,0 +1,195 @@
+name: Build one image
+description: Build, tag, push and scan one image from the docker/images.yaml plan.
+
+inputs:
+  image:
+    description: One image record from `images.py plan`, as JSON.
+    required: true
+  push:
+    description: "'true' to publish to GHCR, 'false' to build only."
+    required: true
+  token:
+    description: GHCR token. A composite action has no `secrets` context, so it
+      must be passed in.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: docker/setup-buildx-action@v3
+
+    # Needed before the existence check as well as before the push: the
+    # packages are private, and the parent image is pulled by `FROM`.
+    - uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.token }}
+
+    # Two tag lists, because the two kinds of tag go to two packages.
+    #
+    #   <namespace>/buildcache   every immutable tag, for every image
+    #   <namespace>/<name>       only the tags a human would type
+    #
+    # A build always writes the first list. The second is written only where a
+    # moving tag means something:
+    #
+    #   edge     a push to `main`, or to a branch whose name contains `docker`.
+    #            Those branches are where the images themselves are developed,
+    #            and `edge` means "newest development image", so it should
+    #            follow that work rather than wait for a merge. The cost is
+    #            accepted and real: `edge` can point at unmerged work, and a
+    #            branch that is abandoned leaves it there until the next push
+    #            to `main`.
+    #   latest   a release tag only. It means "newest release", and no branch
+    #            build may claim that.
+    #
+    # A pull request writes neither: its GITHUB_REF is refs/pull/N/merge, so the
+    # `refs/heads/` guard excludes it even when the head branch is a `docker`
+    # one. A merge commit that exists in no one's clone must not become the
+    # thing `docker pull …:edge` returns.
+    - id: tags
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        # On a pull_request event `github.sha` is the merge commit, which exists
+        # in no one's clone. The head sha is the one worth recording.
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        set -euo pipefail
+        repo=$(jq -r .repo <<<"$IMAGE")
+        cache_repo=$(jq -r .cache_repo <<<"$IMAGE")
+        branch=${GITHUB_REF#refs/heads/}
+        {
+          echo "list<<TAGS"
+          echo "$cache_repo:$(jq -r .tag <<<"$IMAGE")"                      # what CI pins
+          echo "$cache_repo:$(jq -r .sha_tag_prefix <<<"$IMAGE")${HEAD_SHA:0:12}"
+          if [[ "$GITHUB_REF" == refs/heads/* && ( "$branch" == main || "$branch" == *docker* ) ]]; then
+            echo "$repo:$(jq -r .moving_tag <<<"$IMAGE")"
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "$repo:${GITHUB_REF#refs/tags/}"
+            echo "$repo:latest"
+          fi
+          echo TAGS
+        } >> "$GITHUB_OUTPUT"
+
+    - id: check
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+      run: |
+        set -euo pipefail
+        ref=$(jq -r .ref <<<"$IMAGE")
+        if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Skipping build::$ref already exists"
+        else
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - id: build
+      if: steps.check.outputs.exists == 'false'
+      uses: docker/build-push-action@v6
+      with:
+        context: ${{ fromJson(inputs.image).context }}
+        file: ${{ fromJson(inputs.image).dockerfile }}
+        platforms: ${{ fromJson(inputs.image).platforms }}
+        push: ${{ inputs.push == 'true' }}
+        load: ${{ inputs.push != 'true' }}
+        tags: ${{ steps.tags.outputs.list }}
+        build-args: |
+          ${{ fromJson(inputs.image).build_args }}
+        # This label is what links the GHCR package to the repository, which is
+        # in turn what lets GITHUB_TOKEN write and later delete it. It has to be
+        # right on `buildcache` too, which is a package like any other.
+        labels: |
+          org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          org.opencontainers.image.revision=${{ github.sha }}
+        cache-from: type=registry,ref=${{ fromJson(inputs.image).cache_ref }}
+        cache-to: ${{ inputs.push == 'true'
+                   && format('type=registry,ref={0},mode=max', fromJson(inputs.image).cache_ref)
+                   || '' }}
+        provenance: false
+
+    # A skipped build still has to write the sha- tag and move `edge` / `latest`,
+    # or a merge that changes nothing under docker/ leaves them pointing at an
+    # older manifest. `imagetools create` writes a tag against an existing
+    # manifest: no pull, no push, no layer transfer. Across packages it is a
+    # cross-repository blob mount, which is a registry-side operation for the
+    # same reason.
+    - if: steps.check.outputs.exists == 'true' && inputs.push == 'true'
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        TAGS: ${{ steps.tags.outputs.list }}
+      run: |
+        set -euo pipefail
+        ref=$(jq -r .ref <<<"$IMAGE")
+        while read -r tag; do
+          [[ -z "$tag" || "$tag" == "$ref" ]] && continue
+          echo "retag $tag -> $ref"
+          docker buildx imagetools create -t "$tag" "$ref"
+        done <<<"$TAGS"
+
+    # ---------------------------------------------------------------------
+    # Vulnerability scan
+    # ---------------------------------------------------------------------
+    #
+    # Scanning is unconditional -- including when the build was skipped, since
+    # an image whose content has not changed still acquires new CVEs over time,
+    # and that is precisely the image everything else is built on.
+    #
+    # `ref` resolves in all three cases: pushed just now, pushed by an earlier
+    # run, or loaded into the local daemon by a no-push build (trivy checks the
+    # daemon before the registry). TRIVY_USERNAME/TRIVY_PASSWORD cover a
+    # private package, and incidentally raise the rate limit on the ghcr.io
+    # pull of trivy's own vulnerability database.
+    - name: Trivy findings (report)
+      uses: aquasecurity/trivy-action@v0.36.0
+      env:
+        TRIVY_USERNAME: ${{ github.actor }}
+        TRIVY_PASSWORD: ${{ inputs.token }}
+      with:
+        image-ref: ${{ fromJson(inputs.image).ref }}
+        format: table
+        scanners: vuln
+        vuln-type: os,library
+        severity: ${{ fromJson(inputs.image).trivy_severity }}
+        ignore-unfixed: true
+        trivyignores: .trivyignore
+        exit-code: '0'
+
+    # The gating run. `trivy_exit_code` is 1 for runtime images and 0 for
+    # development images, which carry a permanent backlog of compiler and
+    # debugger findings that would otherwise block all work.
+    - name: Trivy findings (SARIF)
+      uses: aquasecurity/trivy-action@v0.36.0
+      env:
+        TRIVY_USERNAME: ${{ github.actor }}
+        TRIVY_PASSWORD: ${{ inputs.token }}
+      with:
+        image-ref: ${{ fromJson(inputs.image).ref }}
+        format: sarif
+        output: trivy-${{ fromJson(inputs.image).name }}.sarif
+        scanners: vuln
+        vuln-type: os,library
+        severity: ${{ fromJson(inputs.image).trivy_severity }}
+        ignore-unfixed: true
+        trivyignores: .trivyignore
+        exit-code: ${{ fromJson(inputs.image).trivy_exit_code }}
+
+    # `!cancelled()`, so that the findings reach the Security tab even --
+    # especially -- on the run that the scan failed. One category per image, or
+    # each upload would resolve the previous image's alerts as fixed.
+    #
+    # The two guards after it are both about not turning one failure into two:
+    # a fork pull request's GITHUB_TOKEN has no security-events: write, and a
+    # build that failed before the scan leaves no SARIF file to upload.
+    - name: Upload SARIF
+      if: ${{ !cancelled() && inputs.push == 'true'
+              && hashFiles(format('trivy-{0}.sarif', fromJson(inputs.image).name)) != '' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: trivy-${{ fromJson(inputs.image).name }}.sarif
+        category: trivy-${{ fromJson(inputs.image).name }}
