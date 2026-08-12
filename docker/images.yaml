@@ -203,4 +203,11 @@ retention:
     - '-cache$'             # the buildx registry cache of a live image
   keep: 5                   # superseded hash-/sha- versions kept per image
   delete_untagged: true     # GHCR accumulates these forever otherwise
-  grace_hours: 1            # an untagged version this new may be mid-push
+
+  # How long an untagged version is left alone. Our own builds never need it:
+  # buildx and `imagetools create` both PUT a manifest at its tag, so a version
+  # here is untagged only after a tag has moved off it. It covers the other
+  # workflow run -- `concurrency` is keyed on the ref, so two branches can push
+  # at once -- for which ten minutes is a comfortable slow layer push. Pass
+  # `--grace-minutes 0` for a one-off manual sweep.
+  grace_minutes: 10

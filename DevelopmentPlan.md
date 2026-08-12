@@ -610,8 +610,20 @@ Three rules keep this from deleting something in use.
   in a year is not stale, it is *current* -- `base-cpu` is expected to sit untouched for months
   while every build depends on it. What "in use" actually means is "named by the plan", and the
   plan is computable.
-- **Untagged versions must survive a grace window** (`grace_hours`), since a manifest is briefly
-  untagged between its push and its tag being written by a concurrent build.
+- **Untagged versions must survive a grace window** (`grace_minutes`, ten). Our own builds do not
+  need it -- buildx and `imagetools create` both `PUT` a manifest at its tag, so a version here is
+  untagged only *after* a tag moved off it -- but `concurrency` is keyed on the ref, so a second
+  branch can be mid-push while this runs.
+
+One assumption underneath all of this is worth naming, because it is true only by configuration:
+**untagged means garbage only while every image is single-platform.** A multi-platform build
+publishes an index, and each per-platform manifest under it is an untagged version of its own;
+deleting those leaves a tag pointing at children that no longer exist. Attestation manifests
+behave the same way, which is why the build passes `provenance: false`. `platforms` is a per-image
+key, so adding `linux/arm64` is a one-line change that would otherwise turn the prune job into a
+wrecking ball -- `prune_packages.py` therefore skips untagged deletion, with a warning annotation,
+for any image declaring more than one platform. Supporting it properly means resolving each
+index's children and protecting those digests.
 
 The split does remove the worst form of the first trap: a release tag and a hash tag can no longer
 be the same version, because they are no longer in the same package.

@@ -42,13 +42,29 @@ version survives if **any** of its tags is protected.
 
 An untagged version can also be one that is a few seconds old, between its
 manifest push and its tag being written by a concurrent build. Untagged
-deletions therefore wait out ``retention.grace_hours``.
+deletions therefore wait out ``retention.grace_minutes``.
+
+The one thing that would make "untagged is garbage" false
+---------------------------------------------------------
+**A multi-platform image.** Its tag names an index, and each per-platform
+manifest under that index is a package version of its own with no tag: deleting
+those leaves a tag pointing at children that no longer exist, which is a broken
+image rather than a reclaimed one. Attestation manifests behave the same way,
+which is why the build passes ``provenance: false``.
+
+Every image is single-platform today, so this cannot arise -- but ``platforms``
+is per-image in ``images.yaml`` and adding ``linux/arm64`` is a one-line change
+that would silently turn this script into a wrecking ball. Untagged deletion is
+therefore **skipped, loudly, for any image that declares more than one
+platform**. Making it work there means resolving each index's children and
+protecting those digests; the guard is here so that day starts with a warning
+instead of an outage.
 
 Usage
 -----
 ``python3 scripts/ci/prune_packages.py``            what would be deleted
 ``python3 scripts/ci/prune_packages.py --delete``   delete it (what CI runs)
-``python3 scripts/ci/prune_packages.py --grace-hours 0``
+``python3 scripts/ci/prune_packages.py --grace-minutes 0``
 
 Needs ``GITHUB_TOKEN`` (or ``GH_TOKEN``) with ``packages: write`` on packages
 linked to this repository.
@@ -188,6 +204,7 @@ def plan_decisions(
     image_names: list[str],
     keep: int,
     tagged_deletable: bool,
+    delete_untagged: bool,
     grace: timedelta,
     now: datetime,
 ) -> list[tuple[dict, bool, str]]:
@@ -202,7 +219,9 @@ def plan_decisions(
 
         if not tags:
             age = now - created_at(version)
-            if age < grace:
+            if not delete_untagged:
+                decisions.append((version, False, "untagged, but untagged deletion is off here"))
+            elif age < grace:
                 decisions.append((version, False, f"untagged but only {format_age(age)} old"))
             else:
                 decisions.append((version, True, f"untagged, {format_age(age)} old"))
@@ -232,10 +251,12 @@ def plan_decisions(
 
 
 def format_age(age: timedelta) -> str:
-    hours = age.total_seconds() / 3600
-    if hours < 48:
-        return f"{hours:.0f}h"
-    return f"{hours / 24:.0f}d"
+    minutes = age.total_seconds() / 60
+    if minutes < 120:
+        return f"{minutes:.0f}m"
+    if minutes < 48 * 60:
+        return f"{minutes / 60:.0f}h"
+    return f"{minutes / 1440:.0f}d"
 
 
 # ---------------------------------------------------------------------------
@@ -255,8 +276,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--delete", action="store_true",
                         help="actually delete; without it nothing is removed")
-    parser.add_argument("--grace-hours", type=float, default=None,
-                        help="override retention.grace_hours from images.yaml")
+    parser.add_argument("--grace-minutes", type=float, default=None,
+                        help="override retention.grace_minutes from images.yaml")
     args = parser.parse_args()
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
@@ -288,23 +309,46 @@ def main() -> None:
 
     protect_patterns = [re.compile(p) for p in retention["protect"]]
     keep = int(retention["keep"])
-    grace = timedelta(hours=args.grace_hours if args.grace_hours is not None
-                      else float(retention.get("grace_hours", 1)))
+    grace = timedelta(minutes=args.grace_minutes if args.grace_minutes is not None
+                      else float(retention.get("grace_minutes", 10)))
     now = datetime.now(timezone.utc)
 
+    # An image built for several platforms publishes an index whose per-platform
+    # children are untagged versions in their own right, so "untagged is
+    # garbage" stops being true and deleting them breaks the tag. See the module
+    # docstring: refuse rather than guess.
+    multi_platform = sorted(
+        name for name, record in plan["images"].items() if "," in record["platforms"]
+    )
+    untagged_ok = bool(retention.get("delete_untagged", True))
+
     api = GitHub(token, owner)
-    packages = [package_name(r["repo"]) for r in plan["images"].values()]
-    if retention.get("delete_untagged", True) or keep:
-        packages.append(cache_package)
+    # package -> the image it belongs to, or None for the shared buildcache.
+    packages = [(package_name(r["repo"]), name) for name, r in plan["images"].items()]
+    packages.append((cache_package, None))
 
     summary_line(f"### Registry prune ({'deleting' if args.delete else 'dry run'})\n")
     total_deleted = failures = 0
 
-    for package in packages:
+    for package, image in packages:
         versions = api.versions(package)
         if versions is None:
             summary_line(f"- `{package}` -- no such package yet, skipped")
             continue
+
+        # buildcache holds every image's versions, so one multi-platform image
+        # is enough to disqualify the whole package.
+        unsafe = multi_platform if image is None else [image] * (image in multi_platform)
+        if unsafe and untagged_ok:
+            summary_line(
+                f"- `{package}` -- untagged deletion SKIPPED: "
+                f"{', '.join(unsafe)} is multi-platform, so untagged versions are "
+                f"the per-platform manifests of a tagged index"
+            )
+            print("::warning title=Untagged versions kept::"
+                  f"{package}: multi-platform image ({', '.join(unsafe)}). Deleting "
+                  "untagged versions would break the index. Teach "
+                  "prune_packages.py to resolve index children before enabling it.")
 
         decisions = plan_decisions(
             versions,
@@ -314,6 +358,7 @@ def main() -> None:
             keep=keep,
             # Only the shared machine-facing package expires tagged versions.
             tagged_deletable=(package == cache_package),
+            delete_untagged=untagged_ok and not unsafe,
             grace=grace,
             now=now,
         )
