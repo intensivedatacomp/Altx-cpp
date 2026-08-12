@@ -100,3 +100,37 @@ jobs:
           image: ${{ toJson(matrix.image) }}
           push:  ${{ needs.prepare.outputs.push }}
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Deletes what this build superseded: previous `edge` manifests, now
+  # untagged, in the per-image packages, and hash-/sha- versions past the keep
+  # window in buildcache. The policy is docker/images.yaml's `retention:` block.
+  #
+  # A matrix job would be wrong here. Deletion must have a single writer, or
+  # several jobs decide "this is the sixth newest, drop it" from different
+  # snapshots of one package.
+  prune:
+    needs: [prepare, tier0, tier1]
+    # Only after a build that published, and only if nothing failed: pruning
+    # against a half-built matrix expires an old image while its replacement
+    # does not exist. `!cancelled()` keeps this eligible when a tier was
+    # skipped for having no images. A pull request never prunes -- it
+    # supersedes nothing.
+    if: ${{ !cancelled() && github.event_name != 'pull_request'
+            && needs.prepare.outputs.push == 'true'
+            && needs.tier0.result != 'failure' && needs.tier1.result != 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet pyyaml
+      # The names come from the same resolver the build used, so this job
+      # contains no image name and no rule of its own. Without --delete the
+      # script only reports, which is what it does when run by hand.
+      - run: python3 scripts/ci/prune_packages.py --delete
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

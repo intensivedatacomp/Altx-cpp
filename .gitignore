@@ -75,3 +75,7 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Python bytecode -- scripts/ci/ imports across modules, so this appears there
+__pycache__/
+*.pyc

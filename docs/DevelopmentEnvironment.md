@@ -65,6 +65,17 @@ docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revisi
 `latest` and `vX.Y.Z` are written only by a `v*` tag, and a pull request build writes no moving
 tag at all.
 
+After a successful build, a `prune` job deletes what that build superseded — untagged leftovers in
+the per-image packages, and hash/sha versions past the keep window in `buildcache`. Nothing tagged
+in a per-image package is ever deleted automatically. The policy is the `retention:` block of
+`docker/images.yaml`, and you can see what it would do without touching anything:
+
+```bash
+GITHUB_TOKEN=<a token with read:packages> python3 scripts/ci/prune_packages.py
+```
+
+It reports only; deleting needs an explicit `--delete`.
+
 Every image is scanned with Trivy and the findings are uploaded to the repository's Security tab,
 one category per image. Development images are report-only; runtime images will fail the build on
 HIGH or CRITICAL findings. Suppressions go in `.trivyignore` at the repository root.
