@@ -540,19 +540,20 @@ Every tag in the shared package is prefixed with the image name, because tags ar
 package and a bare `hash-abc123` could not distinguish `base-cpu` from `dev-cpu`. The prefix is
 generated in `scripts/ci/images.py`; nothing else constructs a reference.
 
-| Tag                       | Package    | Written on                   | Mutable | Audience                     |
-| ------------------------- | ---------- | ---------------------------- | ------- | ---------------------------- |
-| `vX.Y.Z`                  | per image  | push of git tag `v*`         | no      | releases, reproducibility    |
-| `latest`                  | per image  | push of git tag `v*`         | yes     | humans, "give me the release"|
-| `edge`                    | per image  | push to `main`               | yes     | **humans: newest dev image** |
-| `<name>-sha-<short>`      | buildcache | every build                  | no      | debugging a specific build   |
-| `<name>-hash-<content>`   | buildcache | when the image inputs change | no      | **CI jobs**                  |
-| `<name>-cache`            | buildcache | every build that pushes      | yes     | buildx, `type=registry`      |
+| Tag                       | Package    | Written on                          | Mutable | Audience                     |
+| ------------------------- | ---------- | ----------------------------------- | ------- | ---------------------------- |
+| `vX.Y.Z`                  | per image  | push of git tag `v*`                | no      | releases, reproducibility    |
+| `latest`                  | per image  | push of git tag `v*`                | yes     | humans, "give me the release"|
+| `edge`                    | per image  | push to `main` or a `*docker*` branch | yes   | **humans: newest dev image** |
+| `<name>-sha-<short>`      | buildcache | every build                         | no      | debugging a specific build   |
+| `<name>-hash-<content>`   | buildcache | when the image inputs change        | no      | **CI jobs**                  |
+| `<name>-cache`            | buildcache | every build that pushes             | yes     | buildx, `type=registry`      |
 
 The last rows are the point:
 
 - **`edge` answers "I want the most recent development image."** `docker pull …/dev-cpu:edge` is
-  the everyday command, and a `main` build refreshes it.
+  the everyday command, and both a `main` build and an image-work branch refresh it -- see
+  [What runs when](#what-runs-when) for why the branch case is included and what it costs.
 - **`hash-<content>` answers "CI must not rebuild the dev image on every commit."** The tag is a
   hash of everything the image depends on: `docker/`, the base image digest and the package list.
   The workflow computes the hash, asks the registry whether that tag exists, and **skips the build
@@ -873,9 +874,24 @@ is a `docker/images.yaml` edit and only adding a *layer* is a workflow edit.
 `docker` builds and scans too, on the grounds that the branch where the images are being changed is
 exactly the branch that must not wait for a pull request to discover that a Dockerfile no longer
 builds -- and the cost is near zero, since the content-hash check skips a build whose inputs have
-not changed. Such a branch build writes only the immutable `buildcache` tags: **a branch other
-than `main` never moves `edge`**, or the layered build's guarantee that a moving tag is a
-`main` artefact would be lost.
+not changed.
+
+**Those branches also move `edge`.** The alternative -- immutable tags only until a merge -- was
+tried first and is the more conservative rule, but it makes the image packages unobservable
+during precisely the work that changes them: `dev-cpu:edge` would keep pointing at the last merge
+while the branch that rewrites the image publishes nothing anyone can pull by name. `edge` means
+"newest development image", and an image-work branch is where the newest development image is.
+
+The price is stated rather than hidden: `edge` may point at unmerged work, and an abandoned branch
+leaves it there until the next push to `main`. That is tolerable because `edge` is a convenience
+tag for humans and nothing consumes it -- **CI still pins `hash-…` exclusively**, so no build
+result depends on which commit `edge` happens to name. Two limits keep it from spreading:
+
+- **`latest` is never written by a branch build.** It means "newest release" and is a `v*`
+  artefact only.
+- **A pull request writes no moving tag at all**, even from a `*docker*` branch: its `GITHUB_REF`
+  is `refs/pull/N/merge`, and that merge commit exists in no one's clone. `edge` follows branches,
+  not synthetic merges.
 
 ### What runs when
 

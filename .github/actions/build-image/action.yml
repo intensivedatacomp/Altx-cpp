@@ -32,9 +32,22 @@ runs:
     #   <namespace>/<name>       only the tags a human would type
     #
     # A build always writes the first list. The second is written only where a
-    # moving tag means something: `main` and release tags. A pull request, and
-    # a build on a `*docker*` branch, must never move `edge` -- that is the
-    # drift the layered build exists to prevent.
+    # moving tag means something:
+    #
+    #   edge     a push to `main`, or to a branch whose name contains `docker`.
+    #            Those branches are where the images themselves are developed,
+    #            and `edge` means "newest development image", so it should
+    #            follow that work rather than wait for a merge. The cost is
+    #            accepted and real: `edge` can point at unmerged work, and a
+    #            branch that is abandoned leaves it there until the next push
+    #            to `main`.
+    #   latest   a release tag only. It means "newest release", and no branch
+    #            build may claim that.
+    #
+    # A pull request writes neither: its GITHUB_REF is refs/pull/N/merge, so the
+    # `refs/heads/` guard excludes it even when the head branch is a `docker`
+    # one. A merge commit that exists in no one's clone must not become the
+    # thing `docker pull …:edge` returns.
     - id: tags
       shell: bash
       env:
@@ -46,11 +59,14 @@ runs:
         set -euo pipefail
         repo=$(jq -r .repo <<<"$IMAGE")
         cache_repo=$(jq -r .cache_repo <<<"$IMAGE")
+        branch=${GITHUB_REF#refs/heads/}
         {
           echo "list<<TAGS"
           echo "$cache_repo:$(jq -r .tag <<<"$IMAGE")"                      # what CI pins
           echo "$cache_repo:$(jq -r .sha_tag_prefix <<<"$IMAGE")${HEAD_SHA:0:12}"
-          [[ "$GITHUB_REF" == refs/heads/main ]] && echo "$repo:$(jq -r .moving_tag <<<"$IMAGE")"
+          if [[ "$GITHUB_REF" == refs/heads/* && ( "$branch" == main || "$branch" == *docker* ) ]]; then
+            echo "$repo:$(jq -r .moving_tag <<<"$IMAGE")"
+          fi
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             echo "$repo:${GITHUB_REF#refs/tags/}"
             echo "$repo:latest"

@@ -8,11 +8,19 @@ on:
     branches:
       - main
       # Any branch whose name contains "docker" builds and scans the images
-      # too. Work on the images is exactly the work that must not wait for a
-      # pull request to find out whether the Dockerfiles still build, and a
-      # branch build costs nothing when the content hash already exists.
+      # too, and refreshes `edge` with the result. Work on the images is
+      # exactly the work that must not wait for a pull request to find out
+      # whether the Dockerfiles still build, and a branch build costs nothing
+      # when the content hash already exists.
+      #
       # `**` matches any character including `/`, so `feature/docker-x` counts.
       # Matching is case-sensitive: name the branch `docker`, not `Docker`.
+      #
+      # This pattern is paired with the `*docker*` test in the tag step of
+      # .github/actions/build-image: this one decides what builds, that one
+      # decides what may move `edge`. Narrowing one without the other leaves
+      # either a branch that builds but publishes no readable tag, or a rule
+      # that can never fire.
       - '**docker**'
     tags: ['v*']
   pull_request:

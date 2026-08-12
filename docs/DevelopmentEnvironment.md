@@ -50,8 +50,20 @@ python3 scripts/ci/images.py plan              # the whole resolved matrix
 Images are built on every push to `main`, on `v*` tags, on pull requests, and on any branch whose
 name contains `docker` — image work is the case where waiting for a pull request to find out that
 a Dockerfile broke is the most expensive. A build is skipped entirely when an image with the same
-content hash already exists, so most of those runs cost only the hash computation. Only `main` and
-release tags move `edge` and `latest`; a branch or pull request build never does.
+content hash already exists, so most of those runs cost only the hash computation.
+
+`edge` is refreshed by a push to `main` **and** by a push to a `*docker*` branch, so the image
+being worked on is pullable by name while the work is happening. It can therefore point at
+unmerged work; if you need to know exactly what you have, read
+`org.opencontainers.image.revision` from the image:
+
+```bash
+docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+    ghcr.io/intensivedatacomp/altx-cpp/dev-cpu:edge
+```
+
+`latest` and `vX.Y.Z` are written only by a `v*` tag, and a pull request build writes no moving
+tag at all.
 
 Every image is scanned with Trivy and the findings are uploaded to the repository's Security tab,
 one category per image. Development images are report-only; runtime images will fail the build on
