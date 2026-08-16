@@ -767,6 +767,9 @@ It should be enforced that the code is formatted with clang-format and the docum
 - Every argument is documented.
 - Other linting (if possible) e.g. variable cases...
 
+> This section is the *reasoning*. The resulting checks, and how to configure or silence one, are
+> documented for use in `docs/CodeQuality.md`.
+
 The question mark can be dropped: the **`pre-commit` framework itself is language-agnostic**. It
 is a git hook runner that happens to be written in Python, and it drives hooks in any language,
 including plain `system` hooks. The same `.pre-commit-config.yaml` structure as the Python

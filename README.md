@@ -19,6 +19,24 @@ and the editor tooling.
 
 ## Contributing
 
+Install the git hooks once per clone. Formatting, linting, typing and spelling are then checked on
+every `git commit`:
+
+```bash
+uv tool install pre-commit && pre-commit install
+```
+
+Use `uv tool install` rather than `uvx`: the generated git hook records the interpreter path, and
+`uvx` puts it in a cache directory that may be cleaned.
+
+To check the whole tree at any time:
+
+```bash
+pre-commit run --all-files
+```
+
+Every check, and how to silence one, is documented in [docs/CodeQuality.md](docs/CodeQuality.md).
+
 1. Make sure the test suite and pre-commit hooks pass on your branch before
    opening a pull request.
 2. Follow the [NumPy docstring convention](https://numpydoc.readthedocs.io/en/latest/format.html).

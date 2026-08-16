@@ -7,6 +7,9 @@ compiler, the same libraries and the same editor configuration. This page covers
 configurations beyond the plain interactive session shown in the README, and how to use what is
 inside the image.
 
+The automated checks the image carries — `pre-commit` and everything it drives — are documented
+separately in @ref code_quality.
+
 [TOC]
 
 @section devenv_images The images
@@ -14,7 +17,7 @@ inside the image.
 | Image             | Contains                                                     | Status                |
 | ----------------- | ------------------------------------------------------------ | --------------------- |
 | `base-cpu`        | OpenBLAS (openmp build), LAPACKE, serial HDF5, libgomp        | built                 |
-| `dev-cpu`         | `base-cpu` + toolchain, Vim, clangd, gdb, Doxygen, uv         | built                 |
+| `dev-cpu`         | `base-cpu` + toolchain, Vim, clangd, gdb, Doxygen, uv, pre-commit | built             |
 | `runtime-cpu`     | `base-cpu` + `altx-serial`, `altx-omp`                        | needs `CMakeLists.txt`|
 | `runtime-cpu-mpi` | + OpenMPI, parallel HDF5                                       | development stage 5   |
 | `dev-gpu`, `runtime-gpu` | + ROCm                                                  | development stage 6   |
