@@ -79,3 +79,13 @@ Testing/
 # Python bytecode -- scripts/ci/ imports across modules, so this appears there
 __pycache__/
 *.pyc
+
+# Python tool caches -- the pre-commit hooks configured in pyproject.toml
+.mypy_cache/
+.ruff_cache/
+
+# uv reads the root pyproject.toml as a project unless told --no-project, and
+# drops a virtualenv and a lock file here when it does. Nothing is installed
+# from this repository, so neither is a real artefact.
+.venv/
+uv.lock

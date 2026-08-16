@@ -43,7 +43,10 @@ Commands
 ``build-args``  ``--build-arg`` flags for one image, ready to paste into docker
 
 Run it anywhere: ``python3 scripts/ci/images.py plan``, or, if PyYAML is not
-installed, ``uv run --with pyyaml scripts/ci/images.py plan``.
+installed, ``uv run --no-project --with pyyaml scripts/ci/images.py plan``.
+``--no-project`` because the repository's ``pyproject.toml`` configures the
+linters and declares nothing installable; without it uv reads that file as a
+project and materialises a ``.venv`` nobody asked for.
 """
 
 from __future__ import annotations
@@ -55,6 +58,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 try:
     import yaml
@@ -78,6 +82,13 @@ HASH_LENGTH = 12  # hex characters kept in the tag
 # edit, and this is where that is said out loud rather than discovered.
 MAX_TIERS = 2
 
+# ``images.yaml`` is free-form nested YAML and ``resolve`` builds an equally
+# free-form record out of it, so the value type really is Any. Naming the two
+# shapes keeps that admission in one place instead of at every signature, and
+# gives the keys somewhere to be documented.
+Config = dict[str, Any]
+Plan = dict[str, Any]
+
 
 # ---------------------------------------------------------------------------
 # Loading
@@ -85,32 +96,78 @@ MAX_TIERS = 2
 
 
 def repo_root() -> Path:
+    """Locate the top of the working tree.
+
+    Falls back to walking up from this file when git is unavailable -- inside a
+    container that has the sources but not the ``.git`` directory, for instance.
+
+    Returns
+    -------
+    Path
+        The directory holding ``docker/images.yaml``.
+    """
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         return Path(out.stdout.strip())
     except (subprocess.CalledProcessError, FileNotFoundError):
         return Path(__file__).resolve().parents[2]
 
 
-def load_config(root: Path) -> dict:
+def load_config(root: Path) -> Config:
+    """Read and version-check ``docker/images.yaml``.
+
+    Parameters
+    ----------
+    root : Path
+        The top of the working tree, as returned by `repo_root`.
+
+    Returns
+    -------
+    Config
+        The parsed document, guaranteed to declare ``schema_version: 1``.
+    """
     with (root / "docker" / "images.yaml").open() as handle:
-        config = yaml.safe_load(handle)
+        config: Config = yaml.safe_load(handle)
     if config.get("schema_version") != 1:
         sys.exit(f"unsupported schema_version {config.get('schema_version')!r}")
     return config
 
 
-def namespace(config: dict) -> str:
-    """``ghcr.io/<owner>/<repo>`` -- lowercased, since GHCR rejects uppercase."""
+def namespace(config: Config) -> str:
+    """Build the ``ghcr.io/<owner>/<repo>`` prefix every package sits under.
+
+    Parameters
+    ----------
+    config : Config
+        The parsed ``images.yaml``.
+
+    Returns
+    -------
+    str
+        The prefix, lowercased -- GHCR rejects uppercase.
+    """
     repository = os.environ.get("GITHUB_REPOSITORY") or config["repository"]
     return f"{config['registry']}/{repository}".lower()
 
 
-def cache_repository(config: dict) -> str:
-    """The one package that holds every immutable tag and every buildx cache."""
+def cache_repository(config: Config) -> str:
+    """Name the one package that holds every immutable tag and buildx cache.
+
+    Parameters
+    ----------
+    config : Config
+        The parsed ``images.yaml``.
+
+    Returns
+    -------
+    str
+        The fully qualified buildcache package.
+    """
     return f"{namespace(config)}/{config.get('buildcache_package', 'buildcache')}"
 
 
@@ -120,6 +177,18 @@ def cache_repository(config: dict) -> str:
 
 
 def hash_file(path: Path) -> str:
+    """Hash one file, in chunks, so a large input costs no extra memory.
+
+    Parameters
+    ----------
+    path : Path
+        The file to read.
+
+    Returns
+    -------
+    str
+        Its full SHA-256 digest, hex encoded.
+    """
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
@@ -146,7 +215,30 @@ def expand(root: Path, pattern: str) -> list[Path]:
     return matches
 
 
-def content_hash(root: Path, config: dict, name: str, cache: dict[str, str]) -> str:
+def content_hash(root: Path, config: Config, name: str, cache: dict[str, str]) -> str:
+    """Hash everything one image is built from, parents included.
+
+    The digest covers the Dockerfile byte for byte, every file matched by
+    ``inputs``, the static ``build_args``, and -- recursively -- the digest of
+    every parent, so a base-image change propagates to every descendant.
+
+    Parameters
+    ----------
+    root : Path
+        The top of the working tree.
+    config : Config
+        The parsed ``images.yaml``.
+    name : str
+        The image to hash.
+    cache : dict of str to str
+        Memo of already-computed digests, mutated in place. Shared across a
+        whole resolution so a common parent is hashed once.
+
+    Returns
+    -------
+    str
+        The digest, truncated to `HASH_LENGTH` characters for use in a tag.
+    """
     if name in cache:
         return cache[name]
 
@@ -161,7 +253,9 @@ def content_hash(root: Path, config: dict, name: str, cache: dict[str, str]) -> 
     # without anything else in the descendant having to change. Recursion is
     # safe because the graph is validated to be acyclic by tiers() below.
     for arg, parent in sorted(spec.get("parents", {}).items()):
-        digest.update(f"parent\0{arg}\0{content_hash(root, config, parent, cache)}\0".encode())
+        digest.update(
+            f"parent\0{arg}\0{content_hash(root, config, parent, cache)}\0".encode()
+        )
 
     patterns = [spec["dockerfile"], *spec.get("inputs", [])]
     for pattern in patterns:
@@ -181,12 +275,25 @@ def content_hash(root: Path, config: dict, name: str, cache: dict[str, str]) -> 
 # ---------------------------------------------------------------------------
 
 
-def tiers(config: dict, names: list[str]) -> list[list[str]]:
+def tiers(config: Config, names: list[str]) -> list[list[str]]:
     """Group images into build tiers by longest path from a root.
 
     Tier n depends only on tiers < n, so one CI job per tier, with ``needs:``
     between them, reproduces the layering with no per-image job dependencies --
     which GitHub Actions cannot express inside a matrix anyway.
+
+    Parameters
+    ----------
+    config : Config
+        The parsed ``images.yaml``.
+    names : list of str
+        The enabled images to place.
+
+    Returns
+    -------
+    list of list of str
+        One sorted list of image names per tier, shallowest first. Exits if the
+        parent graph has a cycle or an enabled image has a disabled parent.
     """
     depth: dict[str, int] = {}
 
@@ -195,7 +302,9 @@ def tiers(config: dict, names: list[str]) -> list[list[str]]:
             sys.exit(f"cycle in parents: {' -> '.join((*seen, name))}")
         if name not in depth:
             parents = config["images"][name].get("parents", {}).values()
-            depth[name] = 1 + max((resolve(p, (*seen, name)) for p in parents), default=-1)
+            depth[name] = 1 + max(
+                (resolve(p, (*seen, name)) for p in parents), default=-1
+            )
         return depth[name]
 
     for name in names:
@@ -210,7 +319,23 @@ def tiers(config: dict, names: list[str]) -> list[list[str]]:
     ]
 
 
-def resolve(root: Path, config: dict) -> dict:
+def resolve(root: Path, config: Config) -> Plan:
+    """Turn the configuration into every reference CI will need.
+
+    Parameters
+    ----------
+    root : Path
+        The top of the working tree.
+    config : Config
+        The parsed ``images.yaml``.
+
+    Returns
+    -------
+    Plan
+        A mapping with ``images`` (per-image records keyed by name), ``tiers``
+        (those records grouped for the workflow's per-tier jobs), ``retention``,
+        ``namespace`` and ``cache_repo``.
+    """
     prefix = namespace(config)
     cache_repo = cache_repository(config)
     enabled = [n for n, s in config["images"].items() if s.get("enabled", False)]
@@ -248,7 +373,9 @@ def resolve(root: Path, config: dict) -> dict:
             "cache_ref": f"{cache_repo}:{name}-cache",
             "dockerfile": spec["dockerfile"],
             "context": spec.get("context", config["defaults"]["context"]),
-            "platforms": ",".join(spec.get("platforms", config["defaults"]["platforms"])),
+            "platforms": ",".join(
+                spec.get("platforms", config["defaults"]["platforms"])
+            ),
             "cache": spec.get("cache", config["defaults"]["cache"]),
             "moving_tag": spec.get("moving_tag", "edge"),
             "build_args": "\n".join(f"{k}={v}" for k, v in sorted(build_args.items())),
@@ -270,7 +397,7 @@ def resolve(root: Path, config: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def emit_github_output(plan: dict) -> None:
+def emit_github_output(plan: Plan) -> None:
     """Write the plan to $GITHUB_OUTPUT as one JSON value per tier.
 
     One value per tier rather than one per image, because a workflow can only
@@ -281,6 +408,11 @@ def emit_github_output(plan: dict) -> None:
     unset output would arrive in the workflow as the empty string, which is not
     valid JSON for ``fromJson``, so the tier job's guard would have to know the
     difference between "no images here" and "no such tier".
+
+    Parameters
+    ----------
+    plan : Plan
+        The resolved plan, as returned by `resolve`.
     """
     if len(plan["tiers"]) > MAX_TIERS:
         sys.exit(
@@ -294,18 +426,24 @@ def emit_github_output(plan: dict) -> None:
     tiers_json += ["[]"] * (MAX_TIERS - len(tiers_json))
     with open(path, "a") as handle:
         handle.write(f"images={json.dumps(plan['images'], separators=(',', ':'))}\n")
-        handle.write(f"retention={json.dumps(plan['retention'], separators=(',', ':'))}\n")
+        handle.write(
+            f"retention={json.dumps(plan['retention'], separators=(',', ':'))}\n"
+        )
         for index, tier in enumerate(tiers_json):
             handle.write(f"tier{index}={tier}\n")
 
 
 def main() -> None:
+    """Run one of ``plan``, ``ref`` or ``build-args`` from the command line."""
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
     plan_parser = sub.add_parser("plan", help="print the resolved matrix as JSON")
-    plan_parser.add_argument("--github-output", action="store_true",
-                             help="also append the plan to $GITHUB_OUTPUT")
+    plan_parser.add_argument(
+        "--github-output",
+        action="store_true",
+        help="also append the plan to $GITHUB_OUTPUT",
+    )
 
     ref_parser = sub.add_parser("ref", help="print one image's immutable reference")
     ref_parser.add_argument("image")
@@ -325,14 +463,21 @@ def main() -> None:
 
     image = plan["images"].get(args.image)
     if image is None:
-        sys.exit(f"'{args.image}' is not an enabled image "
-                 f"(enabled: {', '.join(sorted(plan['images']))})")
+        sys.exit(
+            f"'{args.image}' is not an enabled image "
+            f"(enabled: {', '.join(sorted(plan['images']))})"
+        )
 
     if args.command == "ref":
         print(image["ref"])
     elif args.command == "build-args":
-        print(" ".join(f"--build-arg {line}"
-                       for line in image["build_args"].splitlines() if line))
+        print(
+            " ".join(
+                f"--build-arg {line}"
+                for line in image["build_args"].splitlines()
+                if line
+            )
+        )
 
 
 if __name__ == "__main__":

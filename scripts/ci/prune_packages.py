@@ -82,12 +82,18 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import images  # noqa: E402  -- same directory, and it owns every name used here
 
 API = "https://api.github.com"
+
+# One entry of the GHCR "list package versions" response. Free-form JSON, so the
+# value type is genuinely Any; only ``id``, ``name``, the timestamps and
+# ``metadata.container.tags`` are ever read, through the accessors below.
+Version = dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
@@ -132,16 +138,36 @@ class GitHub:
 
     @property
     def is_org(self) -> bool:
+        """Whether the owner is an organisation, probed once and remembered.
+
+        Returns
+        -------
+        bool
+            True for an organisation, False for a personal account -- which
+            selects a different pair of endpoints for listing and deleting.
+        """
         if self._is_org is None:
             status, _ = self._request("GET", f"/orgs/{self.owner}")
             self._is_org = status == 200
         return self._is_org
 
-    def versions(self, package: str) -> list[dict] | None:
-        """Every version of one container package, or None if it does not exist."""
+    def versions(self, package: str) -> list[Version] | None:
+        """List every version of one container package, following pagination.
+
+        Parameters
+        ----------
+        package : str
+            The package name, everything after the owner -- ``altx-cpp/dev-cpu``.
+
+        Returns
+        -------
+        list of Version, or None
+            Every version, or None when the package does not exist yet, which
+            is the ordinary state before the first build has pushed anything.
+        """
         quoted = urllib.parse.quote(package, safe="")
         owner_path = f"/orgs/{self.owner}" if self.is_org else f"/users/{self.owner}"
-        collected: list[dict] = []
+        collected: list[Version] = []
         page = 1
         while True:
             status, payload = self._request(
@@ -160,6 +186,20 @@ class GitHub:
             page += 1
 
     def delete(self, package: str, version_id: int) -> tuple[int, object]:
+        """Delete one package version.
+
+        Parameters
+        ----------
+        package : str
+            The package name, everything after the owner.
+        version_id : int
+            The ``id`` field of the version to remove.
+
+        Returns
+        -------
+        tuple of (int, object)
+            The HTTP status and the decoded body; 204 means it is gone.
+        """
         quoted = urllib.parse.quote(package, safe="")
         # Note the asymmetry: /orgs/{owner}/… to delete an organisation's
         # package, but /user/… -- singular, ownerless -- for a personal one.
@@ -174,21 +214,72 @@ class GitHub:
 # ---------------------------------------------------------------------------
 
 
-def tags_of(version: dict) -> list[str]:
-    return version.get("metadata", {}).get("container", {}).get("tags", []) or []
+def tags_of(version: Version) -> list[str]:
+    """Read a version's container tags, tolerating every level being absent.
+
+    Parameters
+    ----------
+    version : Version
+        One entry of the versions listing.
+
+    Returns
+    -------
+    list of str
+        The tags, empty for an untagged version.
+    """
+    container = version.get("metadata", {}).get("container", {})
+    tags: list[str] = container.get("tags") or []
+    return tags
 
 
-def created_at(version: dict) -> datetime:
+def created_at(version: Version) -> datetime:
+    """Read a version's creation time as a timezone-aware datetime.
+
+    Parameters
+    ----------
+    version : Version
+        One entry of the versions listing.
+
+    Returns
+    -------
+    datetime
+        ``created_at``, or ``updated_at`` when the first is absent.
+
+    Notes
+    -----
+    Both being missing would mean the API changed shape underneath this script.
+    That must not be papered over with a default: every decision here is made
+    from an ordering by age, so an invented timestamp does not degrade the
+    result, it silently deletes the wrong versions.
+    """
     stamp = version.get("created_at") or version.get("updated_at")
+    if not isinstance(stamp, str):
+        sys.exit(
+            f"version {version.get('id')} has neither created_at nor updated_at; "
+            "refusing to decide retention without an age"
+        )
     return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
 
 
 def image_of(tags: list[str], names: list[str]) -> str | None:
-    """Which image a buildcache version belongs to, from its ``<name>-…`` tags.
+    """Attribute a buildcache version to an image, from its ``<name>-…`` tags.
 
     The keep window is per image: they share the package but not a lifetime, so
     five pushes to dev-cpu must not evict base-cpu's history. Longest name
     first, so that an image called ``dev-cpu-mpi`` is not read as ``dev-cpu``.
+
+    Parameters
+    ----------
+    tags : list of str
+        The version's tags.
+    names : list of str
+        Every enabled image name.
+
+    Returns
+    -------
+    str, or None
+        The owning image, or None for a tag left behind by an image that is no
+        longer configured.
     """
     for name in sorted(names, key=len, reverse=True):
         if any(tag.startswith(f"{name}-") for tag in tags):
@@ -197,19 +288,50 @@ def image_of(tags: list[str], names: list[str]) -> str | None:
 
 
 def plan_decisions(
-    versions: list[dict],
+    versions: list[Version],
     *,
     protected_tags: set[str],
-    protect_patterns: list[re.Pattern],
+    protect_patterns: list[re.Pattern[str]],
     image_names: list[str],
     keep: int,
     tagged_deletable: bool,
     delete_untagged: bool,
     grace: timedelta,
     now: datetime,
-) -> list[tuple[dict, bool, str]]:
-    """Return ``(version, delete?, reason)`` for every version, newest first."""
-    decisions: list[tuple[dict, bool, str]] = []
+) -> list[tuple[Version, bool, str]]:
+    """Decide the fate of every version of one package.
+
+    Parameters
+    ----------
+    versions : list of Version
+        Every version of the package, in any order.
+    protected_tags : set of str
+        Tags that must survive regardless of age -- the hash tag of every
+        enabled image and every live buildx cache tag.
+    protect_patterns : list of re.Pattern
+        ``retention.protect``, matched against each tag with ``search``.
+    image_names : list of str
+        Every enabled image name, used to attribute a buildcache tag.
+    keep : int
+        How many tagged versions to keep **per image**.
+    tagged_deletable : bool
+        Whether tagged versions may expire at all. False for the human-facing
+        packages, where every tag is one a person may have typed.
+    delete_untagged : bool
+        Whether untagged versions may be deleted; off for a multi-platform
+        image, whose untagged versions are an index's per-platform children.
+    grace : timedelta
+        How new an untagged version has to be to be left alone, covering the
+        window between a manifest push and a concurrent build tagging it.
+    now : datetime
+        The reference time that `grace` is measured against.
+
+    Returns
+    -------
+    list of (Version, bool, str)
+        One ``(version, delete?, reason)`` triple per version, newest first.
+    """
+    decisions: list[tuple[Version, bool, str]] = []
     # Per image, the tagged candidates in newest-first order; the keep window is
     # applied to that order rather than to the package as a whole.
     seen: dict[str | None, int] = {}
@@ -220,9 +342,13 @@ def plan_decisions(
         if not tags:
             age = now - created_at(version)
             if not delete_untagged:
-                decisions.append((version, False, "untagged, but untagged deletion is off here"))
+                decisions.append(
+                    (version, False, "untagged, but untagged deletion is off here")
+                )
             elif age < grace:
-                decisions.append((version, False, f"untagged but only {format_age(age)} old"))
+                decisions.append(
+                    (version, False, f"untagged but only {format_age(age)} old")
+                )
             else:
                 decisions.append((version, True, f"untagged, {format_age(age)} old"))
             continue
@@ -251,6 +377,18 @@ def plan_decisions(
 
 
 def format_age(age: timedelta) -> str:
+    """Render an age for a log line, in whichever unit reads best.
+
+    Parameters
+    ----------
+    age : timedelta
+        The age to render.
+
+    Returns
+    -------
+    str
+        Minutes below two hours, hours below two days, days above that.
+    """
     minutes = age.total_seconds() / 60
     if minutes < 120:
         return f"{minutes:.0f}m"
@@ -265,6 +403,14 @@ def format_age(age: timedelta) -> str:
 
 
 def summary_line(text: str) -> None:
+    """Write one line to stdout and, under CI, to the job summary.
+
+    Parameters
+    ----------
+    text : str
+        The line, without a trailing newline. Markdown, since the job summary
+        renders it.
+    """
     print(text)
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if path:
@@ -273,11 +419,24 @@ def summary_line(text: str) -> None:
 
 
 def main() -> None:
+    """Resolve the plan, decide every package's versions, and report or delete.
+
+    Exits 1 when ``--delete`` was given and at least one deletion failed --
+    usually a token without ``packages: write``. That fails this job alone; it
+    is never a reason to distrust images that were just built and verified.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--delete", action="store_true",
-                        help="actually delete; without it nothing is removed")
-    parser.add_argument("--grace-minutes", type=float, default=None,
-                        help="override retention.grace_minutes from images.yaml")
+    parser.add_argument(
+        "--delete",
+        action="store_true",
+        help="actually delete; without it nothing is removed",
+    )
+    parser.add_argument(
+        "--grace-minutes",
+        type=float,
+        default=None,
+        help="override retention.grace_minutes from images.yaml",
+    )
     args = parser.parse_args()
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
@@ -289,8 +448,9 @@ def main() -> None:
     plan = images.resolve(root, config)
     retention = plan["retention"]
 
-    namespace = plan["namespace"]                 # ghcr.io/<owner>/<repo>
+    namespace = plan["namespace"]  # ghcr.io/<owner>/<repo>
     owner = namespace.split("/")[1]
+
     # The package name is everything after the owner: `altx-cpp/dev-cpu`, which
     # the API takes percent-encoded.
     def package_name(repo: str) -> str:
@@ -309,8 +469,13 @@ def main() -> None:
 
     protect_patterns = [re.compile(p) for p in retention["protect"]]
     keep = int(retention["keep"])
-    grace = timedelta(minutes=args.grace_minutes if args.grace_minutes is not None
-                      else float(retention.get("grace_minutes", 10)))
+    grace = timedelta(
+        minutes=(
+            args.grace_minutes
+            if args.grace_minutes is not None
+            else float(retention.get("grace_minutes", 10))
+        )
+    )
     now = datetime.now(timezone.utc)
 
     # An image built for several platforms publishes an index whose per-platform
@@ -338,17 +503,21 @@ def main() -> None:
 
         # buildcache holds every image's versions, so one multi-platform image
         # is enough to disqualify the whole package.
-        unsafe = multi_platform if image is None else [image] * (image in multi_platform)
+        unsafe = (
+            multi_platform if image is None else [image] * (image in multi_platform)
+        )
         if unsafe and untagged_ok:
             summary_line(
                 f"- `{package}` -- untagged deletion SKIPPED: "
                 f"{', '.join(unsafe)} is multi-platform, so untagged versions are "
                 f"the per-platform manifests of a tagged index"
             )
-            print("::warning title=Untagged versions kept::"
-                  f"{package}: multi-platform image ({', '.join(unsafe)}). Deleting "
-                  "untagged versions would break the index. Teach "
-                  "prune_packages.py to resolve index children before enabling it.")
+            print(
+                "::warning title=Untagged versions kept::"
+                f"{package}: multi-platform image ({', '.join(unsafe)}). Deleting "
+                "untagged versions would break the index. Teach "
+                "prune_packages.py to resolve index children before enabling it."
+            )
 
         decisions = plan_decisions(
             versions,
@@ -365,8 +534,7 @@ def main() -> None:
 
         doomed = [(v, why) for v, delete, why in decisions if delete]
         summary_line(
-            f"- `{package}` -- {len(versions)} versions, "
-            f"{len(doomed)} to delete"
+            f"- `{package}` -- {len(versions)} versions, {len(doomed)} to delete"
         )
         for version, why in doomed:
             digest = version["name"][:19]
@@ -379,8 +547,10 @@ def main() -> None:
                 total_deleted += 1
             else:
                 failures += 1
-                print(f"::warning title=Prune failed::{package} {digest}: "
-                      f"HTTP {status} {payload}")
+                print(
+                    f"::warning title=Prune failed::{package} {digest}: "
+                    f"HTTP {status} {payload}"
+                )
 
     if args.delete:
         summary_line(f"\nDeleted {total_deleted} versions, {failures} failed.")

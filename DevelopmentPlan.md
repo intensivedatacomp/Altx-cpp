@@ -809,6 +809,48 @@ The last four exist because this project carries far more non-C++ configuration 
 one did -- seven workflows, five Dockerfiles and a set of shell entrypoints -- and those are
 exactly the files where a mistake is not caught until CI runs.
 
+### Ruff and mypy stay, for `scripts/`
+
+Above, the C++ hooks *substitute* for black, ruff and mypy. That is right for the source tree and
+wrong for `scripts/`, which holds real Python: `scripts/ci/images.py` and
+`scripts/ci/prune_packages.py` decide every image tag in CI, and `scripts/gen_reference.py` will
+generate the correctness oracle. Those files are load-bearing and unreviewed by any compiler, so
+`ruff` and `mypy --strict` run on them, scoped to `^scripts/.*\.py$`.
+
+`black` and `pydocstyle` do **not** come across, even though the Python repository has both:
+`ruff format` and ruff's `D` rules do the same work in one hook. Of the two `nbqa` hooks only
+**`nbqa-mypy`** does: both ruff hooks declare `types_or: [python, pyi, jupyter]` and ruff reads
+`.ipynb` natively, so `nbqa-ruff` and `nbqa-black` would report the same findings a second time.
+mypy has no such support, which is the one real gap nbqa fills. It is configured now, before the
+first notebook exists, so that notebook is checked on the day it is added.
+
+The settings live in a **`pyproject.toml` that has no `[build-system]` and no `[project]` table**.
+Both tools read `[tool.*]` from it with no other setup, which is the only reason the file exists;
+it is a config carrier, not a package manifest. A `[project]` table would declare this repository
+to be a distributable Python package, which it is not.
+
+It has one side effect worth knowing about before it is rediscovered as a mystery: `uv` reads any
+root `pyproject.toml` as a project, so a bare `uv run scripts/ci/images.py` now materialises a
+`.venv/` in the working tree. Ad-hoc runs pass `--no-project`; CI is unaffected, since the
+workflows invoke these scripts with `python3`.
+
+Two mypy details that are not obvious and will otherwise be rediscovered:
+
+- pre-commit passes **explicit filenames**, and an explicit path overrides `files`/`exclude` in
+  `pyproject.toml`. Scoping has to be expressed with the hook's `files:` key.
+- the hook runs mypy in an **isolated environment** without the project's dependencies, so stub
+  packages are listed in `additional_dependencies` (`types-PyYAML`) and everything else is covered
+  by `ignore_missing_imports`.
+
+Because `prune_packages.py` imports `images.py`, the hook sets `pass_filenames: false` and passes
+the directory. Checking one of a pair of files in isolation reports different errors from checking
+both, which would make `pre-commit run` and `pre-commit run --all-files` disagree.
+
+For an occasional exception, prefer `# type: ignore[code]` on the offending line -- with the code
+in brackets, since `strict` rejects a bare one -- and fall back to a `[[tool.mypy.overrides]]`
+block per module, switching off the single `strict` sub-flag that is in the way rather than
+`strict` itself.
+
 ### Documenting every function and every argument
 
 This is enforceable, but only with the right Doxygen settings, and there is a trap:
