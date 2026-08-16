@@ -665,6 +665,30 @@ For the light Python that does live in `dev-cpu` and `dev-gpu`, the answer to
 - Fast enough that the layer stops being something to think about.
 - `UV_COMPILE_BYTECODE=1`, `UV_LINK_MODE=copy`, a **pinned** uv version rather than `latest`, and a
   lock file, so the image is reproducible.
+- `uv python install 3.14 --default`, so that `python` and `python3` in the container are the same
+  interpreter version as `ghcr.io/halmosb/docker-builder/python:3.14-cpu`, where
+  `scripts/gen_reference.py` runs. A helper script then behaves identically in both places instead
+  of being written against whatever Ubuntu happens to ship. `python` is not a rename of anything:
+  Ubuntu provides no unversioned alias at all, and the python3.12 that exists is incidental --
+  `vim-nox` depends on it. Both stay under `/usr/bin`; `${HOME}/.local/bin` merely comes first.
+
+  **The order of that step against the pre-commit layer is load-bearing, in both directions.** It
+  must come *after*, because `uv tool install` resolves the default interpreter: install 3.14 first
+  and pre-commit's tool environment is built on 3.14, and its hook environments with it, so the
+  baked `py_env-python3.12` directories become cache misses a fresh container tries to rebuild over
+  the network -- and some pinned hooks would not survive it, mypy 1.10.0 having no 3.14 wheel. And
+  it is *safe* to come after only because pre-commit resolves its default interpreter from its own
+  `sys.executable` rather than from `python3` on PATH, so the shims are invisible to it. That was
+  measured, not assumed: with 3.14 as the default, the hook environments stay `py_env-python3.12`
+  and nothing reinstalls. `smoke_precommit` runs the suite with `--network none` so that a future
+  reordering fails the build rather than the next person's first commit.
+
+  The same step deletes the interpreter's extracted `pip`. A python-build-standalone build ships
+  one in `site-packages`, and it is the identical finding the pre-commit prune deals with -- trivy
+  reads pip's vendored `msgpack` and `setuptools` out of it -- reappearing by a different route.
+  `uv pip install` is what this image documents anyway, `python -m venv` is unaffected, and
+  ensurepip's bundled wheel stays, so `python -m ensurepip` restores pip for anyone who wants it.
+  Trivy does not open a `.whl`, so keeping the wheel costs nothing.
 
 **micromamba is the better tool for a job this project does not have.** Its real advantage is
 conda-forge's handling of native libraries -- an `h5py` genuinely built against the same MPI and
@@ -688,10 +712,27 @@ Three things that turned out to matter when `dev.Dockerfile` was wired up this w
   The cache is baked, so it is part of the image's identity: bumping a hook `rev` has to rebuild
   the image. Without that entry the baked environments silently stop matching the configuration,
   which is precisely the cost this layer exists to avoid paying twice.
-- **The cache is not small.** `install-hooks` materialises a virtualenv per Python hook, downloads
-  binaries for hadolint and shellcheck, and fetches an entire Go toolchain for `actionlint`, whose
-  hook is `language: golang`. That is the trade: image size, once, against every fresh container
-  rebuilding it over the network.
+- **The cache is not small, and most of what makes it big is not needed after the build.**
+  `install-hooks` materialises a virtualenv per Python hook, downloads binaries for hadolint and
+  shellcheck, and fetches an entire Go toolchain for `actionlint`, whose hook is `language:
+  golang`. That is the trade: image size, once, against every fresh container rebuilding it over
+  the network. But the trade is much better than it first looked, because three parts of that are
+  purely build-time:
+
+  | Leftover | Size | Why it can go |
+  | --- | --- | --- |
+  | Go toolchain + module cache | 270 MB | The five binaries it produced are static; nothing re-links them |
+  | `pip` in nine hook virtualenvs | 101 MB | pre-commit keys an environment on repo + rev + `additional_dependencies`, so changing any of them builds a *new* environment with a fresh `pip` rather than reusing this one |
+  | Four unused `go install ./...` binaries | ~50 MB | `actionlint` is the hook entry point; the rest are that project's own code generators |
+
+  Pruning them, plus `~/.cache/{go-build,pip,virtualenv,uv}`, takes the hook cache from 796 MB to
+  386 MB and `~/.cache` as a whole from 993 MB to 407 MB. It must happen **inside the `RUN` that
+  creates them** -- a file deleted in a later layer still occupies the earlier one, so a separate
+  cleanup layer would improve only the Trivy result, not the size.
+
+  It also *is* the Trivy result: see [Vulnerability scanning](#vulnerability-scanning). The prune
+  is the one place in these Dockerfiles where a later edit can silently break a hook, so
+  `scripts/build_docker_images_locally.sh` runs the whole suite inside the finished image.
 
 ### Vim
 
@@ -753,9 +794,46 @@ There should be debuggers and profilers in the development images:
 
 ### Vulnerability scanning
 
-Images are scanned with Trivy in CI. Runtime images **fail** the build on HIGH or CRITICAL
-findings; development images are **report-only**, since compilers, debuggers and VTune guarantee
-a permanent backlog of findings that would otherwise block all work.
+Images are scanned with Trivy in CI. **Every image fails the build on a HIGH or CRITICAL finding**,
+development images included.
+
+> **Revised.** This section originally made development images report-only, on the reasoning that
+> compilers, debuggers and VTune guarantee a permanent backlog of findings that would otherwise
+> block all work. Measurement did not support it. Scanned with `ignore-unfixed: true`, `dev-cpu`
+> produced seven HIGH findings and `base-cpu` none, and not one of the seven came from the
+> toolchain:
+>
+> * five from `generate-webhook-events`, one of the five binaries pre-commit's `language: golang`
+>   produces from the actionlint repository via `go install ./...`. It is a code generator for that
+>   project's own source tree, it is the only one of the five linked against `golang.org/x/net`,
+>   and nothing in the image ever runs it;
+> * two from the `pip` that seeds every hook virtualenv -- `msgpack` and `setuptools`, both reached
+>   through pip's vendored dependency tree rather than installed on their own account, and counted
+>   once per virtualenv.
+>
+> Both are build-time leftovers, so the fix is to prune them in the layer that creates them rather
+> than to accept them: see
+> [Python in the images](#python-in-the-images-light-only-installed-with-uv). A backlog that turns
+> out to be empty is not a reason to switch the alarm off, and the reasoning above would have kept
+> it off permanently while the actual findings had nothing to do with the premise.
+>
+> Two consequences worth stating. The gate is now the thing that notices when a *new* leftover
+> arrives -- a hook added in a language whose toolchain outlives its output, say -- which is exactly
+> the class of problem that would otherwise go unexamined for months. And `.trivyignore` stops
+> being decoration: it is the only release valve, so an entry there needs a reason and an expiry.
+>
+> The operational consequence to plan for: because the scan runs even when the build is *skipped*
+> (an unchanged image still accumulates CVEs), a new advisory against a package in `base-cpu` will
+> start failing every pull request, including ones that touch no Dockerfile. The remedy is a
+> rebuild, and a rebuild only happens when the content hash changes -- so it takes an edit to the
+> Dockerfile. `apt-get upgrade` is what makes that edit *sufficient*; before it, rebuilding
+> refreshed only the packages the Dockerfile names. The remaining gap is that nothing rebuilds on a
+> schedule, which is `nightly.yml`'s job when it arrives.
+>
+> What this does **not** change: VTune. It stays behind `ARG WITH_VTUNE=0`, and if the 2--3 GB
+> Intel layer does turn out to carry an irreducible backlog, the per-image `trivy:` override in
+> `docker/images.yaml` is still there -- the mechanism was never removed, only its default
+> flipped.
 
 Size expectation: `runtime-cpu` in the low hundreds of MB, `runtime-gpu` several GB. The ROCm
 layer dominates and is reduced by installing the ROCm *runtime* rather than the full SDK in the
@@ -1128,13 +1206,22 @@ attention belongs on the page above.
 
 Vulnerability scanning follows `docker-builder`: Trivy with `scanners: vuln`, SARIF uploaded to
 the GitHub Security tab under a per-image category, `ignore-unfixed: true` and a `.trivyignore`.
-The difference is the gating, described under
-[Vulnerability scanning](#vulnerability-scanning): runtime images fail on HIGH or CRITICAL,
-development images are report-only. Each image is scanned in its own build job -- hence the
-per-image category, without which every upload would resolve the previous image's alerts as fixed.
+Every image gates on HIGH or CRITICAL, for the reasons recorded under
+[Vulnerability scanning](#vulnerability-scanning). Each image is scanned in its own build job --
+hence the per-image category, without which every upload would resolve the previous image's alerts
+as fixed.
 
-Two details that are not obvious:
+Three details that are not obvious:
 
+- **The SARIF run cannot also be the gate.** `trivy-action` unsets the severity filter whenever the
+  format is `sarif` (`unset TRIVY_SEVERITY` in its entrypoint, announced in the log as "Building
+  SARIF report with all severities"), on the reasoning that code scanning wants everything and
+  filters at display time. Attach `exit-code` to that step and the build gates on *every* severity
+  while `defaults.trivy.severity` quietly means nothing -- which is how the first gated build
+  failed, on a lone UNKNOWN-severity advisory against `golang.org/x/sys` inside the `actionlint`
+  binary. So there are two runs: SARIF first with `exit-code: 0`, then the upload, then a `table`
+  run that carries the severity filter and the exit code. The order matters as much as the split;
+  gate first and a failure means nothing reaches the Security tab.
 - **The scan runs even when the build was skipped.** An image whose content has not changed still
   accumulates new CVEs, and it is precisely the unchanged base image that everything else is built
   on. Skipping the scan with the build would mean a base image is scanned once and then never

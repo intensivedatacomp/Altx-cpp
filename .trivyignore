@@ -6,11 +6,13 @@
 # anything listed here is something the distribution has fixed and we have
 # chosen not to take.
 #
-# Development images (base-cpu, dev-cpu) are report-only -- a compiler,
-# debugger and profiler toolchain guarantees a permanent backlog -- so findings
-# there do not need an entry here to keep CI green. Runtime images fail the
-# build on HIGH or CRITICAL, which is where this file will start earning its
-# keep.
+# Every image gates on HIGH and CRITICAL -- development images included, since
+# the backlog they were assumed to carry turned out to be empty once the
+# build-time leftovers were pruned out of ~/.cache/pre-commit. This file is
+# therefore the only release valve there is, and the one thing that keeps the
+# gate from blocking work on the day a fix lands upstream but not yet in the
+# Ubuntu archive. Prefer fixing the image; reach for this when the fix is not
+# ours to make, and always with an expiry.
 #
 # Format (trivy):
 #   CVE-2023-12345

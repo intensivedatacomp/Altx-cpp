@@ -80,8 +80,48 @@ GITHUB_TOKEN=<a token with read:packages> python3 scripts/ci/prune_packages.py
 It reports only; deleting needs an explicit `--delete`.
 
 Every image is scanned with Trivy and the findings are uploaded to the repository's Security tab,
-one category per image. Development images are report-only; runtime images will fail the build on
-HIGH or CRITICAL findings. Suppressions go in `.trivyignore` at the repository root.
+one category per image. **Every image fails the build on a HIGH or CRITICAL finding**, development
+images included, and the scan runs with `ignore-unfixed: true` so only findings someone can act on
+count. Suppressions go in `.trivyignore` at the repository root, one CVE per line with a reason and
+an expiry.
+
+What lands in the Security tab is *not* the same set: that upload deliberately carries every
+severity, including LOW and UNKNOWN, so the tab stays the unfiltered view. Only the separate gating
+step applies the HIGH/CRITICAL filter. An alert there is therefore not necessarily something that
+will fail a build — check its severity before treating it as one.
+
+The findings a development image accumulates are not usually the compiler and debugger it ships;
+they are what the *build* left behind. `dev-cpu` bakes `~/.cache/pre-commit` in, and
+`pre-commit install-hooks` leaves a Go toolchain, four unused code-generator binaries from the
+actionlint repository, and one copy of `pip` — with pip's whole vendored dependency tree — in
+every hook virtualenv. `docker/dev.Dockerfile` prunes all of it in the same layer that creates it,
+which is both what clears the scan and what takes about 590 MB off the image — `~/.cache` inside
+`dev-cpu` measures 407 MB where it used to measure 993 MB.
+
+@section devenv_python Python in the container
+
+`python` and `python3` are a uv-managed CPython 3.14, matching the image `scripts/gen_reference.py`
+runs in — so a helper script behaves the same in both places:
+
+```console
+$ python3 --version
+Python 3.14.7
+```
+
+Ubuntu's own `python3.12` is untouched at `/usr/bin/python3.12`; the uv shims in
+`~/.local/bin` simply come first on `PATH`. There is no unversioned `python` on Ubuntu at all, so
+that name comes entirely from uv.
+
+`pip` is **not** installed into it. Use `uv pip install` — it is the documented tool here, and it
+is what keeps the image's Trivy gate clean, since an extracted `pip` drags its whole vendored
+dependency tree into the scan. `python -m venv` is unaffected. If you genuinely need pip itself,
+`python -m ensurepip` puts it back from the wheel that ships with the interpreter.
+
+@note `pre-commit` deliberately does **not** use it. Its hook environments are built on the 3.12
+that its own interpreter reports, are baked into the image, and would have to be rebuilt over the
+network if that changed — and not every pinned hook has a 3.14 wheel. This is why
+`docker/dev.Dockerfile` installs 3.14 *after* the pre-commit layer, and why the smoke tests run the
+hooks with no network.
 
 @section devenv_building Building the images
 

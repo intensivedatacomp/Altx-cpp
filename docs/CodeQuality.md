@@ -202,8 +202,21 @@ developer running a different one from CI fights an endless reformatting loop; t
 `clang-format-18` and the hook is pinned to `v18.1.3`, and inside the container the two are
 identical by construction.
 
-The cost is size — roughly 800 MB of hook environments, most of it the Go toolchain `actionlint`
-needs — paid once in the image rather than over the network in every fresh container.
+The cost is size — roughly 390 MB of hook environments — paid once in the image rather than over
+the network in every fresh container.
+
+That number was 800 MB before `docker/dev.Dockerfile` started pruning what `install-hooks` uses
+but does not need afterwards: the 270 MB Go toolchain that builds `actionlint`, the four other
+binaries `go install ./...` produces from that repository, and the `pip` seeded into every hook
+virtualenv. The pruning is in the same `RUN` as the install, because a file deleted in a later
+layer still occupies the earlier one. It is also what makes the image pass its Trivy gate — those
+leftovers, not the compiler, were the entire HIGH backlog.
+
+@warning Adding a hook in a language whose toolchain is separable from its output — a second
+`language: golang` hook, for instance — means updating that prune. It is written to keep exactly
+one Go binary, `actionlint`. `scripts/build_docker_images_locally.sh` runs the whole hook suite
+inside the finished image for this reason: an over-eager prune fails there rather than in someone's
+first commit.
 
 @note `.pre-commit-config.yaml` is listed under `inputs` for `dev-cpu` and `dev-gpu` in
 `docker/images.yaml`. Because the cache is baked in, it is part of the image's content hash:
