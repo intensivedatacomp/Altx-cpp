@@ -975,7 +975,7 @@ only one source.
 
 | Workflow            | Trigger                                            | Does                                                    |
 | ------------------- | -------------------------------------------------- | ------------------------------------------------------- |
-| `pre-commit.yml`    | pull request, push to `main`                       | the same hooks as the local pre-commit                   |
+| `pre-commit.yml`    | push to **any** branch, pull request, manual       | the same hooks as the local pre-commit                   |
 | `docker-images.yml` | push to `main` / `**docker**` / `v*`, PR, manual   | build the image matrix if the content hash is absent; push and Trivy-scan |
 | `build-test.yml`    | pull request, push to `main`                       | the preset matrix: configure, build, `ctest`             |
 | `nightly.yml`       | schedule                                           | sanitizers, GPU build, Trivy, benchmarks                 |
@@ -984,7 +984,15 @@ only one source.
 
 `pre-commit.yml` and `docker-images.yml` exist so far; the rest arrive with the code they test.
 
-Two decisions inside `pre-commit.yml` that are not obvious from the table:
+Three decisions inside `pre-commit.yml` that are not obvious from the table:
+
+- **Every branch, not just `main` and pull requests.** The checks are cheap -- under a minute cold,
+  and the hook environments are cached -- and their value is entirely in how early they arrive.
+  Learning that a file is unformatted when a pull request is opened is the delay the job exists to
+  remove. Tags are excluded: a tag names a commit that was already linted as a branch. The cost is
+  that a push to a branch with an open pull request runs the job twice; that is accepted rather
+  than deduplicated, because the two runs check different trees -- `pull_request` runs against the
+  merge of head into base, `push` against the branch as written.
 
 - **`SKIP=no-commit-to-branch`.** That hook is a statement about the branch a developer is working
   on. The one place it would ever fire in CI is the push event *on* `main` -- after the pull

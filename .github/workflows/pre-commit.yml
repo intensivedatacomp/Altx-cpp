@@ -14,7 +14,14 @@ name: Pre-commit
 # a Dockerfile.
 on:
   push:
-    branches: [main]
+    # Every branch. Linting is cheap and the feedback is worth more the earlier
+    # it arrives -- waiting for a pull request to be opened before finding out
+    # that a file is unformatted is the whole failure this job exists to avoid.
+    #
+    # `'**'` matches names containing `/`, so `feature/x` counts. Tags are
+    # deliberately excluded: a tag points at a commit that was already linted
+    # when it was pushed as a branch.
+    branches: ['**']
   pull_request:
     branches: [main, master]
   workflow_dispatch:
@@ -22,9 +29,19 @@ on:
 permissions:
   contents: read
 
+# Keyed on the branch name in both events -- `head_ref` for a pull request,
+# `ref_name` for a push -- so a rapid series of pushes leaves one run standing
+# rather than a queue of superseded ones.
+#
+# A push to a branch that already has a pull request open does run this twice,
+# and that is accepted rather than deduplicated. The two are not the same check:
+# `pull_request` runs against the merge of head into base, which is what will
+# actually land, while `push` runs against the branch as written. Collapsing
+# them into one concurrency group would have whichever started second cancel the
+# first, and a cancelled run reads as a failed required check.
 concurrency:
-  group: pre-commit-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: pre-commit-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   pre-commit:

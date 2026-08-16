@@ -212,14 +212,21 @@ stop matching the configuration.
 
 @section quality_ci In CI
 
-`.github/workflows/pre-commit.yml` runs the same hooks over the whole tree on every pull request
-and on every push to `main`. Two steps, one per local tier: the commit-stage hooks, then the
-push-stage ones. A cold run takes about a minute; `~/.cache/pre-commit` is cached, keyed on
+`.github/workflows/pre-commit.yml` runs the same hooks over the whole tree on **every push, on
+every branch**, and on every pull request. Two steps, one per local tier: the commit-stage hooks,
+then the push-stage ones. A cold run takes about a minute; `~/.cache/pre-commit` is cached, keyed on
 `.pre-commit-config.yaml`, so bumping one hook's `rev` rebuilds only that environment.
+
+Pushing to a branch that already has a pull request open runs the job twice, which is accepted
+rather than deduplicated: `pull_request` runs against the merge of head into base — what will
+actually land — while `push` runs against the branch as written. Superseded runs of the *same*
+event are cancelled, so a rapid series of pushes leaves one standing.
 
 `no-commit-to-branch` is skipped there, via `SKIP=no-commit-to-branch`. It is a statement about the
 branch a developer is working on, and the one place it would fire in CI is the push event *on*
-`main` — after the pull request carrying the change has already been reviewed and merged.
+`main` — after the pull request carrying the change has already been reviewed and merged. On a
+feature branch it passes anyway, and on a pull request `actions/checkout` leaves a detached HEAD,
+so there is no branch for it to object to.
 
 @note The job does **not** run inside `dev-cpu`, and does not need to. Every hook supplies its own
 tool at a pinned version: `clang-format` is a `language: python` hook that installs the pinned
