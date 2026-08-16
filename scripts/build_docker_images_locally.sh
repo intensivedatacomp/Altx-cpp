@@ -234,7 +234,12 @@ smoke_dev() {
     for tool in g++ cmake ninja gdb git vim clangd clang-format doxygen uv; do
         local version
         if version=$(in_image "${DEV_IMG}" "command -v ${tool} >/dev/null && ${tool} --version 2>&1 | head -1"); then
-            [[ -n "$version" ]] && ok "${tool}: ${version}" || die "${tool} not found"
+            # Not `A && B || C`: if `ok` ever returns non-zero, C would run too.
+            if [[ -n "$version" ]]; then
+                ok "${tool}: ${version}"
+            else
+                die "${tool} not found"
+            fi
         else
             die "${tool} not found in ${DEV_IMG}"
         fi

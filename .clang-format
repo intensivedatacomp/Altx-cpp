@@ -1,0 +1,45 @@
+# A minimal delta on Google, deliberately not a `clang-format --dump-config`.
+#
+# https://github.com/intensivedatacomp/ALT-CPP -- the earlier, abandoned C++
+# attempt -- commits a full dump of every option for one clang-format version.
+# That pins the project to the assumptions of the version that produced it: new
+# releases add options and occasionally change defaults, so the dump silently
+# freezes those defaults and every upgrade produces a large, meaningless diff.
+# `BasedOnStyle: Google` plus the genuine overrides expresses the same intent
+# and survives upgrades.
+#
+# The version is pinned in .pre-commit-config.yaml (mirrors-clang-format v18.1.3)
+# to match the clang-format-18 that docker/dev.Dockerfile installs. clang-format
+# output differs between major versions, so a developer running a different one
+# fights an endless reformatting loop. Run pre-commit inside the dev container
+# and the two are identical by construction.
+---
+BasedOnStyle: Google
+
+# Carried over from ALT-CPP: 4 is the house style.
+IndentWidth: 4
+
+# 80 columns, as ALT-CPP had. Doc comments and mathematical expressions both
+# read better narrow, and it keeps two files side by side on one screen.
+ColumnLimit: 80
+
+# `int *p`, not `int* p` -- the star binds to the name, which is what the
+# declarator syntax actually means and what keeps `int *p, *q` honest.
+PointerAlignment: Right
+
+# Google leaves this true, which tells clang-format to infer pointer alignment
+# *per file* from whatever is already there -- so PointerAlignment above would
+# be ignored and both spellings could persist in different files. ALT-CPP sets
+# PointerAlignment without this and gets exactly that inconsistency.
+DerivePointerAlignment: false
+
+# Follows from IndentWidth: 4. Google's -1 is chosen against its own IndentWidth
+# of 2, which puts `public:` one column left of the members; at IndentWidth 4
+# that same -1 would land it at an arbitrary 3 spaces. -4 keeps the intent --
+# access specifiers flush with the `class` keyword.
+AccessModifierOffset: -4
+
+# The project is C++20 (CLAUDE.md, and the plan's Conventions section). Google's
+# default is Auto, which guesses per file and can misparse a construct it has
+# not seen an example of yet.
+Standard: c++20

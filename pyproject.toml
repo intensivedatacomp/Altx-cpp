@@ -1,0 +1,113 @@
+# Configuration only -- this repository is not a Python package.
+#
+# There is deliberately no `[build-system]` and no `[project]` table: nothing here
+# is ever built, installed or published. The file exists because ruff and mypy
+# both read `[tool.*]` out of `pyproject.toml` with no other setup, which keeps
+# the CI helper scripts under `scripts/` configured in one place instead of in a
+# `ruff.toml` plus a `mypy.ini`. Adding `[project]` would be the mistake: it turns
+# the repository into a distributable Python package that it is not.
+#
+# The settings mirror ../docker-builder/pyproject.toml, minus the packaging,
+# pytest and coverage sections, which have no counterpart here. Hooks are run
+# with `uvx pre-commit run --all-files`; see .pre-commit-config.yaml.
+#
+# One consequence of the file existing at all: uv now treats this directory as a
+# project, so `uv run` creates a `.venv` here. Pass `--no-project` when running a
+# script ad hoc, as scripts/ci/images.py documents.
+
+# --------------------------------------------------
+# Ruff -- linting, import sorting, docstring rules and formatting
+# --------------------------------------------------
+# Ruff subsumes black (`ruff format`) and pydocstyle (the `D` rules), so neither
+# is a separate hook here even though the Python repository has both.
+
+[tool.ruff]
+
+line-length = 88
+target-version = "py313"
+
+# No `include`: ruff's default already covers `*.py`, `*.pyi` and `*.ipynb`
+# anywhere in the tree, and narrowing it to `scripts/` would silently skip the
+# first notebook someone adds.
+
+[tool.ruff.lint]
+
+# E/F: pycodestyle + pyflakes. I: import sorting. D: docstrings.
+select = ["E", "F", "I", "D"]
+ignore = []
+
+[tool.ruff.lint.pydocstyle]
+
+# Also switches off the rules that contradict this convention (D107, D203,
+# D212/D213, D413, D415, D416, D417), so `ignore` above stays empty.
+convention = "numpy"
+
+# --------------------------------------------------
+# codespell -- typos, including in comments and documentation
+# --------------------------------------------------
+# Not a Python tool, but it reads `[tool.codespell]` from here, which keeps the
+# exception list next to ruff's and mypy's instead of in a fifth dotfile.
+
+[tool.codespell]
+
+# Nothing needs excusing yet. When something does, add
+#
+#     ignore-words-list = "<word>,<word>"
+#
+# -- comma-separated, lowercase, each entry earning a comment, since an
+# unexplained one is indistinguishable from a typo someone gave up on. The key
+# is absent rather than set to "" because codespell renders it as a bare `-L`
+# and argparse then rejects its own command line.
+#
+# Expect the mathematical vocabulary to need this as `src/` grows: codespell
+# corrects on edit distance, and short domain names are what it mistakes for
+# typos.
+
+# Directories that hold generated or third-party text. pre-commit passes the
+# changed files explicitly, so this only matters for a manual whole-tree run.
+skip = "./.git,./build,./docs/html,./.mypy_cache,./.ruff_cache,*.h5"
+
+# --------------------------------------------------
+# MyPy -- type checking
+# --------------------------------------------------
+
+[tool.mypy]
+
+python_version = "3.13"
+strict = true
+
+# The pre-commit hook runs mypy in its own isolated environment, which does not
+# have this project's dependencies installed. Stubs that exist on PyPI are added
+# to `additional_dependencies` in .pre-commit-config.yaml; everything else has to
+# be tolerated rather than resolved.
+ignore_missing_imports = true
+
+# Only consulted when mypy is invoked with no path argument -- an explicit path,
+# whether typed by hand or supplied by pre-commit, wins over both of these. The
+# hook therefore does its own scoping; see the `files:` key there.
+files = ["scripts"]
+exclude = ['^build/']
+
+# --- Occasional ignores ---------------------------------------------------
+#
+# Preferred, in order:
+#
+#   1. `# type: ignore[code]` on the single offending line, with the specific
+#      error code in brackets and a comment saying why. A bare `# type: ignore`
+#      is rejected under `strict` anyway (warn_unused_ignores / the
+#      `ignore-without-code` check).
+#   2. A per-module override below, when a whole file or third-party package is
+#      the problem rather than one line.
+#
+# Overrides are written as separate tables so each can carry its reason:
+#
+#   [[tool.mypy.overrides]]
+#   module = "yaml"          # a package with no stubs and no types-* on PyPI
+#   ignore_missing_imports = true
+#
+#   [[tool.mypy.overrides]]
+#   module = "scripts.ci.something"
+#   disallow_untyped_defs = false   # relax one strict sub-flag, not all of them
+#
+# `strict` is shorthand for a set of individual flags, so an override should
+# switch off the one flag that is in the way rather than the whole set.

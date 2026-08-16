@@ -1,0 +1,163 @@
+# Install the git hooks once per clone:  uvx pre-commit install
+# Check the whole tree by hand:          uvx pre-commit run --all-files
+#
+# Tool settings live in pyproject.toml ([tool.ruff], [tool.mypy]); this file only
+# says which tools run, on which files, at which pinned version.
+
+# Installs both git hooks from one `pre-commit install`, so a checkout does not
+# have to remember `--hook-type pre-push` for the checks that need the whole
+# tree. Nothing is staged at `pre-push` yet; the Doxygen documentation-coverage
+# hook goes there, per the plan's three-tier split.
+default_install_hook_types: [pre-commit, pre-push]
+
+# The tiers are meant to be disjoint: without this, a hook with no `stages:` key
+# runs at *every* stage, so `git push` would re-run everything `git commit` just
+# ran. A pre-push hook now has to say `stages: [pre-push]` and is the only thing
+# that runs there.
+default_stages: [pre-commit]
+
+repos:
+  # General formatting
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      # These three ship `stages: [commit, push, manual]` upstream, which beats
+      # `default_stages` -- without the override they would run a second time on
+      # every `git push`, having already passed on the way in.
+      - id: trailing-whitespace  # Trims trailing whitespace.
+        stages: [pre-commit]
+      - id: end-of-file-fixer  # Makes sure files end in a newline and only a newline.
+        stages: [pre-commit]
+      - id: check-yaml  # Attempts to load all yaml files to verify syntax.
+      - id: check-json  # Attempts to load all yaml files to verify syntax.
+      - id: check-merge-conflict  # Check for files that contain merge conflict strings.
+      - id: check-added-large-files  # Prevent giant files from being committed.
+        args: [ '--maxkb=500' ]
+        stages: [pre-commit]
+      - id: no-commit-to-branch  # Work on a feature branch, open a PR.
+        # Both spelled out rather than relying on the default, so the policy is
+        # readable here. This one hook is the reason `pre-commit install`
+        # matters: `run --all-files` cannot enforce a branch policy that only
+        # exists at the moment of committing.
+        args: [ '--branch', 'main', '--branch', 'master' ]
+
+  # --- clang-format (C/C++/CUDA formatting) ---
+  # The `rev` and the clang-format-18 that docker/dev.Dockerfile installs must
+  # stay equal: clang-format output differs between major versions, so a
+  # mismatch is an endless reformatting loop between one developer and CI.
+  # v18.1.3 is what Ubuntu 24.04 ships as `clang-format-18`. Change one, change
+  # the other -- and running pre-commit inside dev-cpu makes them identical by
+  # construction. Style lives in .clang-format.
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v18.1.3
+    hooks:
+      - id: clang-format
+        # The hook's own default also claims json, javascript, java and proto.
+        # clang-format is not this project's formatter for any of those, and
+        # letting it near .json in particular would fight the JSON that CI
+        # writes. `.hip`, when src/hip/ exists, is not a type `identify` knows
+        # and will need adding here explicitly.
+        types_or: [c, c++, cuda]
+
+  # --- gersemi (CMake formatting) ---
+  # No CMakeLists.txt exists yet -- stage 2 writes the first one. Configured now
+  # so that one arrives formatted instead of being reformatted later in a commit
+  # that touches every line of it.
+  #
+  # The hook lives in a separate repository from gersemi itself: the manifest
+  # was moved out of BlankSpruce/gersemi at 0.27.1, so pinning the tool repo
+  # fails with "`.pre-commit-hooks.yaml` is not a file". Both carry the same
+  # version tags.
+  #
+  # No `args`: the manifest already passes `-i`, and gersemi's default line
+  # length is 80, which is .clang-format's ColumnLimit -- so C++ and CMake wrap
+  # alike without saying so twice. Overriding `args` would drop the `-i`.
+  - repo: https://github.com/BlankSpruce/gersemi-pre-commit
+    rev: 0.28.0
+    hooks:
+      - id: gersemi
+
+  # --- Dockerfiles, workflows, shell ---
+  # The plan's reason for these three: this project carries far more non-C++
+  # configuration than the Python one did, and those are exactly the files where
+  # a mistake is invisible until CI runs. All three fetch their own binaries, so
+  # they add nothing to the image.
+  - repo: https://github.com/AleksaC/hadolint-py
+    rev: v2.15.1
+    hooks:
+      # This mirror ships the binary. The upstream `hadolint-docker` hook shells
+      # out to `docker run`, which cannot work inside the dev container the plan
+      # wants pre-commit run from.
+      - id: hadolint
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+
+  # --- codespell (typos, including in comments and documentation) ---
+  # Configured in pyproject.toml under [tool.codespell], where the exception
+  # list can carry a reason per word.
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.3
+    hooks:
+      - id: codespell
+        additional_dependencies: [tomli]
+
+  # --- Ruff (fast lint + autofix, and formatting) ---
+  # `ruff format` replaces black and the `D` rules replace pydocstyle, so neither
+  # is a separate hook. Both are still in ../docker-builder for historical reasons.
+  #
+  # These two also cover notebooks with no nbqa wrapper: both hooks declare
+  # `types_or: [python, pyi, jupyter]`, and ruff reads `.ipynb` natively.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.11
+    hooks:
+      - id: ruff-format # This runs `ruff format`
+      - id: ruff-check  # This runs `ruff check`
+        args: ["--fix"] # otherwise not compatible with Ruff
+
+  # --- Mypy (type checking) ---
+  # Two deliberate differences from ../docker-builder:
+  #
+  # `files:` -- pre-commit passes explicit filenames, and an explicit path
+  # overrides `files`/`exclude` in pyproject.toml. Scoping has to be here.
+  #
+  # `pass_filenames: false` -- scripts/ci/prune_packages.py imports scripts/ci/
+  # images.py, so checking one file in isolation gives different answers from
+  # checking both. Passing the directory instead makes `pre-commit run` and
+  # `pre-commit run --all-files` agree; `files:` still decides *whether* it runs.
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        files: ^scripts/.*\.py$
+        pass_filenames: false
+        args: ["scripts"]
+        additional_dependencies:
+          # The hook's environment is isolated from the project, so every stub
+          # package a checked file needs is listed here by hand.
+          - types-PyYAML
+
+  # --- nbQA (notebooks) ---
+  # There are no notebooks yet; this is here so the first one is checked on the
+  # day it is added rather than whenever someone remembers the hook is missing.
+  #
+  # Only mypy is wrapped. ruff needs no wrapper -- see above -- so `nbqa-ruff`
+  # and `nbqa-black`, which ../docker-builder has, would duplicate work already
+  # done and report the same findings twice.
+  - repo: https://github.com/nbQA-dev/nbQA
+    rev: 1.9.1
+    hooks:
+      - id: nbqa-mypy
+        # nbqa shells out to the tool, so both it and its stubs must be present
+        # in the hook's environment; the pyproject settings are picked up from
+        # the repository root as usual.
+        additional_dependencies:
+          - mypy==1.10.0
+          - types-PyYAML

@@ -677,6 +677,22 @@ One practical detail: `pre-commit` builds and caches an environment per hook, so
 run `pre-commit install-hooks` at build time to bake `~/.cache/pre-commit` into a layer.
 Otherwise the first commit in a fresh container pays for every hook environment at once.
 
+Three things that turned out to matter when `dev.Dockerfile` was wired up this way:
+
+- **`uv tool install pre-commit`, not `uvx pre-commit`.** `uvx` resolves into an ephemeral cache
+  directory, and `pre-commit install` writes that path into `.git/hooks/pre-commit` verbatim. One
+  `uv cache clean` later, every `git commit` in the repository fails with `` `pre-commit` not
+  found `` -- the generated hook's only fallback is a `pre-commit` on `PATH`, which `uvx` does not
+  provide. `uv tool install` gives both a stable path and that fallback.
+- **`.pre-commit-config.yaml` is an `input` of `dev-cpu` and `dev-gpu` in `docker/images.yaml`.**
+  The cache is baked, so it is part of the image's identity: bumping a hook `rev` has to rebuild
+  the image. Without that entry the baked environments silently stop matching the configuration,
+  which is precisely the cost this layer exists to avoid paying twice.
+- **The cache is not small.** `install-hooks` materialises a virtualenv per Python hook, downloads
+  binaries for hadolint and shellcheck, and fetches an entire Go toolchain for `actionlint`, whose
+  hook is `language: golang`. That is the trade: image size, once, against every fresh container
+  rebuilding it over the network.
+
 ### Vim
 
 The right mechanism is **clangd driven by `compile_commands.json`**, which CMake emits with
@@ -746,10 +762,13 @@ layer dominates and is reduced by installing the ROCm *runtime* rather than the 
 runtime image -- the SDK belongs only in `dev-gpu`.
 
 ## Pre-commit
-It should be enforced that the code is formated with clang-format and the documentation, which will be generated with Doxygen, in the code should be checked:
+It should be enforced that the code is formatted with clang-format and the documentation, which will be generated with Doxygen, in the code should be checked:
 - Every function/class has documentation.
 - Every argument is documented.
 - Other linting (if possible) e.g. variable cases...
+
+> This section is the *reasoning*. The resulting checks, and how to configure or silence one, are
+> documented for use in `docs/CodeQuality.md`.
 
 The question mark can be dropped: the **`pre-commit` framework itself is language-agnostic**. It
 is a git hook runner that happens to be written in Python, and it drives hooks in any language,
@@ -799,7 +818,7 @@ Added for this project:
 | Hook                            | Purpose                                          |
 | ------------------------------- | ------------------------------------------------ |
 | `mirrors-clang-format`          | formatting, on changed files                     |
-| `gersemi` or `cmake-format`     | `CMakeLists.txt` and `*.cmake` formatting        |
+| `gersemi`                       | `CMakeLists.txt` and `*.cmake` formatting        |
 | `hadolint`                      | the Dockerfiles in `docker/`                     |
 | `actionlint`                    | the workflows in `.github/workflows/`            |
 | `shellcheck`                    | the entrypoints and helper scripts               |
@@ -808,6 +827,72 @@ Added for this project:
 The last four exist because this project carries far more non-C++ configuration than the Python
 one did -- seven workflows, five Dockerfiles and a set of shell entrypoints -- and those are
 exactly the files where a mistake is not caught until CI runs.
+
+Four details settled when these were wired up:
+
+- **`gersemi`, not `cmake-format`.** Its pre-commit manifest lives in a *separate* repository,
+  `BlankSpruce/gersemi-pre-commit`; it was moved out of the tool repository at 0.27.1, and pinning
+  the tool repository instead fails with "`.pre-commit-hooks.yaml` is not a file". Both carry the
+  same version tags. Its default line length is already 80, matching `.clang-format`'s
+  `ColumnLimit`, so no `args` are passed -- overriding them would also drop the manifest's `-i`.
+- **`AleksaC/hadolint-py`, not the upstream `hadolint-docker` hook**, which shells out to
+  `docker run` and therefore cannot work inside the development container that
+  [Keeping the hook and the image in agreement](#keeping-the-hook-and-the-image-in-agreement) wants
+  `pre-commit` run from.
+- **`clang-format` is pinned to `v18.1.3`**, which is what Ubuntu 24.04 packages as
+  `clang-format-18` and what `docker/dev.Dockerfile` installs. That equality is the whole point of
+  the section above; a `rev` bump is a Dockerfile edit too.
+- **`.hadolint.yaml` silences four rules, and only four.** The dividing line it maintains: a rule
+  is disabled when hadolint is wrong about this repository (`DL3006` fires on `FROM base-${FLAVOR}`,
+  a *stage* reference, while the real bases are pinned by digest; `DL3064` matches the *name*
+  `ARG USERNAME`; `DL3001` objects to the headless `vim -c PlugInstall` that installs the editor's
+  plugins) or when it argues with a decision already made here (`DL3008`, pin apt versions --
+  Ubuntu's archive keeps only the current version of a package, so a pin fails as soon as a
+  security update lands, and reproducibility is bought instead by digest-pinned bases and the
+  per-Dockerfile content hash). Everything hadolint is *right* about is fixed in the Dockerfile.
+  A configuration entry hiding a real defect is worse than not running the linter.
+
+### Ruff and mypy stay, for `scripts/`
+
+Above, the C++ hooks *substitute* for black, ruff and mypy. That is right for the source tree and
+wrong for `scripts/`, which holds real Python: `scripts/ci/images.py` and
+`scripts/ci/prune_packages.py` decide every image tag in CI, and `scripts/gen_reference.py` will
+generate the correctness oracle. Those files are load-bearing and unreviewed by any compiler, so
+`ruff` and `mypy --strict` run on them, scoped to `^scripts/.*\.py$`.
+
+`black` and `pydocstyle` do **not** come across, even though the Python repository has both:
+`ruff format` and ruff's `D` rules do the same work in one hook. Of the two `nbqa` hooks only
+**`nbqa-mypy`** does: both ruff hooks declare `types_or: [python, pyi, jupyter]` and ruff reads
+`.ipynb` natively, so `nbqa-ruff` and `nbqa-black` would report the same findings a second time.
+mypy has no such support, which is the one real gap nbqa fills. It is configured now, before the
+first notebook exists, so that notebook is checked on the day it is added.
+
+The settings live in a **`pyproject.toml` that has no `[build-system]` and no `[project]` table**.
+Both tools read `[tool.*]` from it with no other setup, which is the only reason the file exists;
+it is a config carrier, not a package manifest. A `[project]` table would declare this repository
+to be a distributable Python package, which it is not.
+
+It has one side effect worth knowing about before it is rediscovered as a mystery: `uv` reads any
+root `pyproject.toml` as a project, so a bare `uv run scripts/ci/images.py` now materialises a
+`.venv/` in the working tree. Ad-hoc runs pass `--no-project`; CI is unaffected, since the
+workflows invoke these scripts with `python3`.
+
+Two mypy details that are not obvious and will otherwise be rediscovered:
+
+- pre-commit passes **explicit filenames**, and an explicit path overrides `files`/`exclude` in
+  `pyproject.toml`. Scoping has to be expressed with the hook's `files:` key.
+- the hook runs mypy in an **isolated environment** without the project's dependencies, so stub
+  packages are listed in `additional_dependencies` (`types-PyYAML`) and everything else is covered
+  by `ignore_missing_imports`.
+
+Because `prune_packages.py` imports `images.py`, the hook sets `pass_filenames: false` and passes
+the directory. Checking one of a pair of files in isolation reports different errors from checking
+both, which would make `pre-commit run` and `pre-commit run --all-files` disagree.
+
+For an occasional exception, prefer `# type: ignore[code]` on the offending line -- with the code
+in brackets, since `strict` rejects a bare one -- and fall back to a `[[tool.mypy.overrides]]`
+block per module, switching off the single `strict` sub-flag that is in the way rather than
+`strict` itself.
 
 ### Documenting every function and every argument
 
@@ -851,18 +936,22 @@ paragraph.
 ### The clang-format configuration
 
 `ALT-CPP` already has a `.clang-format`: Google-based, `IndentWidth: 4`, `ColumnLimit: 80`,
-`PointerAlignment: Left`. That is a reasonable house style and is worth carrying over. Two
-changes:
+`PointerAlignment: Left`. The indent width and column limit are a reasonable house style and are
+worth carrying over. Three changes:
 
 1. **Commit a minimal delta, not a `--dump-config` output.** The existing file is a full dump of
    every option for one clang-format version. New releases add options and occasionally change
    defaults, so a full dump silently pins the project to the assumptions of the version that
    produced it and produces large, meaningless diffs on every upgrade. `BasedOnStyle: Google` plus
    the five or six genuine overrides expresses the same intent and survives upgrades.
-2. **Set `DerivePointerAlignment: false`.** The existing file sets `PointerAlignment: Left` and
-   then leaves Google's `DerivePointerAlignment: true` in place, which tells clang-format to infer
+2. **`PointerAlignment: Right`, reversing `ALT-CPP`.** `int *p`, not `int* p`: the star binds to
+   the declarator, not to the type, which is what the grammar says and what makes `int *p, *q`
+   read correctly rather than looking like it declares two pointers when written `int* p, q`.
+3. **Set `DerivePointerAlignment: false`.** The existing file sets `PointerAlignment` and then
+   leaves Google's `DerivePointerAlignment: true` in place, which tells clang-format to infer
    the alignment *per file* from what is already there -- so the explicit setting is ignored and
-   `int* p` and `int *p` can both persist in different files.
+   `int* p` and `int *p` can both persist in different files. The setting above is inert without
+   this one.
 
 ### Keeping the hook and the image in agreement
 
@@ -886,14 +975,39 @@ only one source.
 
 | Workflow            | Trigger                                            | Does                                                    |
 | ------------------- | -------------------------------------------------- | ------------------------------------------------------- |
-| `pre-commit.yml`    | pull request, push to `main`                       | the same hooks as the local pre-commit                   |
+| `pre-commit.yml`    | push to **any** branch, pull request, manual       | the same hooks as the local pre-commit                   |
 | `docker-images.yml` | push to `main` / `**docker**` / `v*`, PR, manual   | build the image matrix if the content hash is absent; push and Trivy-scan |
 | `build-test.yml`    | pull request, push to `main`                       | the preset matrix: configure, build, `ctest`             |
 | `nightly.yml`       | schedule                                           | sanitizers, GPU build, Trivy, benchmarks                 |
 | `release.yml`       | push of git tag `v*`                               | rebuild all, version tags, Trivy gating, GitHub release  |
 | `docs.yml`          | push to `main`, git tag                            | Doxygen to GitHub Pages                                  |
 
-Only `docker-images.yml` exists so far; the rest arrive with the code they test. The separate
+`pre-commit.yml` and `docker-images.yml` exist so far; the rest arrive with the code they test.
+
+Three decisions inside `pre-commit.yml` that are not obvious from the table:
+
+- **Every branch, not just `main` and pull requests.** The checks are cheap -- under a minute cold,
+  and the hook environments are cached -- and their value is entirely in how early they arrive.
+  Learning that a file is unformatted when a pull request is opened is the delay the job exists to
+  remove. Tags are excluded: a tag names a commit that was already linted as a branch. The cost is
+  that a push to a branch with an open pull request runs the job twice; that is accepted rather
+  than deduplicated, because the two runs check different trees -- `pull_request` runs against the
+  merge of head into base, `push` against the branch as written.
+
+- **`SKIP=no-commit-to-branch`.** That hook is a statement about the branch a developer is working
+  on. The one place it would ever fire in CI is the push event *on* `main` -- after the pull
+  request carrying the change has been reviewed and merged -- where it can only fail a job for
+  something no longer preventable.
+- **It does not run inside `dev-cpu`.** [Keeping the hook and the image in
+  agreement](#keeping-the-hook-and-the-image-in-agreement) argues for running `pre-commit` in the
+  container, and that is still the right advice for a *developer*, whose editor and manual
+  `clang-format` invocations use the image's binary. It is not needed for the hook itself:
+  `mirrors-clang-format` is a `language: python` hook that installs the pinned `clang-format`
+  wheel, so it never touches `/usr/bin/clang-format-18` and a plain runner formats identically. The
+  `rev` pin is what enforces agreement, in every context. Using the image here would also make
+  linting wait on the image build, and deadlock on a pull request that changes a Dockerfile.
+
+The separate
 `cleanup.yml` originally planned here is **not** wanted: registry pruning is a `prune` job inside
 `docker-images.yml`, because what a build supersedes is known exactly at the moment it publishes
 and only approximately a week later. See [Registry hygiene](#registry-hygiene).
