@@ -1187,8 +1187,17 @@ Every image gates on HIGH or CRITICAL, for the reasons recorded under
 hence the per-image category, without which every upload would resolve the previous image's alerts
 as fixed.
 
-Two details that are not obvious:
+Three details that are not obvious:
 
+- **The SARIF run cannot also be the gate.** `trivy-action` unsets the severity filter whenever the
+  format is `sarif` (`unset TRIVY_SEVERITY` in its entrypoint, announced in the log as "Building
+  SARIF report with all severities"), on the reasoning that code scanning wants everything and
+  filters at display time. Attach `exit-code` to that step and the build gates on *every* severity
+  while `defaults.trivy.severity` quietly means nothing -- which is how the first gated build
+  failed, on a lone UNKNOWN-severity advisory against `golang.org/x/sys` inside the `actionlint`
+  binary. So there are two runs: SARIF first with `exit-code: 0`, then the upload, then a `table`
+  run that carries the severity filter and the exit code. The order matters as much as the split;
+  gate first and a failure means nothing reaches the Security tab.
 - **The scan runs even when the build was skipped.** An image whose content has not changed still
   accumulates new CVEs, and it is precisely the unchanged base image that everything else is built
   on. Skipping the scan with the build would mean a base image is scanned once and then never

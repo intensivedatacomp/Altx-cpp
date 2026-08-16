@@ -85,6 +85,11 @@ images included, and the scan runs with `ignore-unfixed: true` so only findings 
 count. Suppressions go in `.trivyignore` at the repository root, one CVE per line with a reason and
 an expiry.
 
+What lands in the Security tab is *not* the same set: that upload deliberately carries every
+severity, including LOW and UNKNOWN, so the tab stays the unfiltered view. Only the separate gating
+step applies the HIGH/CRITICAL filter. An alert there is therefore not necessarily something that
+will fail a build — check its severity before treating it as one.
+
 The findings a development image accumulates are not usually the compiler and debugger it ships;
 they are what the *build* left behind. `dev-cpu` bakes `~/.cache/pre-commit` in, and
 `pre-commit install-hooks` leaves a Go toolchain, four unused code-generator binaries from the

@@ -145,7 +145,64 @@ runs:
     # daemon before the registry). TRIVY_USERNAME/TRIVY_PASSWORD cover a
     # private package, and incidentally raise the rate limit on the ghcr.io
     # pull of trivy's own vulnerability database.
-    - name: Trivy findings (report)
+    # Two runs, in this order: SARIF first so the Security tab is populated
+    # whatever happens next, then the gate.
+    #
+    # They cannot be one step. `trivy-action` *unsets* the severity filter
+    # whenever the format is sarif -- "Building SARIF report with all
+    # severities" in the log, `unset TRIVY_SEVERITY` in its entrypoint -- on the
+    # reasoning that code scanning should see everything and filter at display
+    # time. That is right for an upload and wrong for a gate: with `exit-code`
+    # on the SARIF step, the build fails on findings of *any* severity, and
+    # `defaults.trivy.severity` in docker/images.yaml silently means nothing.
+    # It cost one build, on a single UNKNOWN-severity advisory against
+    # golang.org/x/sys inside the actionlint binary -- a severity no policy here
+    # ever asked to gate on.
+    #
+    # `limit-severities-for-sarif: true` would also fix it, by narrowing the
+    # SARIF instead. Splitting the steps is the better trade: the Security tab
+    # keeps the full picture at every severity, which is where an unfiltered
+    # view belongs, while the build gates on the range docker/images.yaml names.
+    - name: Trivy findings (SARIF, all severities)
+      uses: aquasecurity/trivy-action@v0.36.0
+      env:
+        TRIVY_USERNAME: ${{ github.actor }}
+        TRIVY_PASSWORD: ${{ inputs.token }}
+      with:
+        image-ref: ${{ fromJson(inputs.image).ref }}
+        format: sarif
+        output: trivy-${{ fromJson(inputs.image).name }}.sarif
+        scanners: vuln
+        vuln-type: os,library
+        ignore-unfixed: true
+        trivyignores: .trivyignore
+        # Never gates. The step below does that, and this one must not fail
+        # before the upload gets a chance to run.
+        exit-code: '0'
+
+    # `!cancelled()`, so that the findings reach the Security tab even --
+    # especially -- on the run that the gate below fails. One category per
+    # image, or each upload would resolve the previous image's alerts as fixed.
+    #
+    # The two guards after it are both about not turning one failure into two:
+    # a fork pull request's GITHUB_TOKEN has no security-events: write, and a
+    # build that failed before the scan leaves no SARIF file to upload.
+    - name: Upload SARIF
+      if: ${{ !cancelled() && inputs.push == 'true'
+              && hashFiles(format('trivy-{0}.sarif', fromJson(inputs.image).name)) != '' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: trivy-${{ fromJson(inputs.image).name }}.sarif
+        category: trivy-${{ fromJson(inputs.image).name }}
+
+    # The gate, and the readable report -- one step, because a table is printed
+    # whether trivy exits 0 or 1, so a separate report run would only scan the
+    # same image a third time to print the same thing.
+    #
+    # `trivy_exit_code` is 1 for every image (docker/images.yaml,
+    # `defaults.trivy.fail`), and `trivy_severity` is what it gates on. The
+    # format here is deliberately *not* sarif; see above for why that matters.
+    - name: Trivy gate (${{ fromJson(inputs.image).trivy_severity }})
       uses: aquasecurity/trivy-action@v0.36.0
       env:
         TRIVY_USERNAME: ${{ github.actor }}
@@ -158,38 +215,4 @@ runs:
         severity: ${{ fromJson(inputs.image).trivy_severity }}
         ignore-unfixed: true
         trivyignores: .trivyignore
-        exit-code: '0'
-
-    # The gating run. `trivy_exit_code` is 1 for runtime images and 0 for
-    # development images, which carry a permanent backlog of compiler and
-    # debugger findings that would otherwise block all work.
-    - name: Trivy findings (SARIF)
-      uses: aquasecurity/trivy-action@v0.36.0
-      env:
-        TRIVY_USERNAME: ${{ github.actor }}
-        TRIVY_PASSWORD: ${{ inputs.token }}
-      with:
-        image-ref: ${{ fromJson(inputs.image).ref }}
-        format: sarif
-        output: trivy-${{ fromJson(inputs.image).name }}.sarif
-        scanners: vuln
-        vuln-type: os,library
-        severity: ${{ fromJson(inputs.image).trivy_severity }}
-        ignore-unfixed: true
-        trivyignores: .trivyignore
         exit-code: ${{ fromJson(inputs.image).trivy_exit_code }}
-
-    # `!cancelled()`, so that the findings reach the Security tab even --
-    # especially -- on the run that the scan failed. One category per image, or
-    # each upload would resolve the previous image's alerts as fixed.
-    #
-    # The two guards after it are both about not turning one failure into two:
-    # a fork pull request's GITHUB_TOKEN has no security-events: write, and a
-    # build that failed before the scan leaves no SARIF file to upload.
-    - name: Upload SARIF
-      if: ${{ !cancelled() && inputs.push == 'true'
-              && hashFiles(format('trivy-{0}.sarif', fromJson(inputs.image).name)) != '' }}
-      uses: github/codeql-action/upload-sarif@v3
-      with:
-        sarif_file: trivy-${{ fromJson(inputs.image).name }}.sarif
-        category: trivy-${{ fromJson(inputs.image).name }}
