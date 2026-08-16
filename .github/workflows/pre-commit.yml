@@ -1,0 +1,71 @@
+name: Pre-commit
+
+# The same hooks a developer runs locally, over the whole tree rather than the
+# changed files. `pre-commit install` is per-clone and can be skipped with
+# `--no-verify`, so this job is what makes the checks a property of the
+# repository rather than of each contributor's setup.
+#
+# No container. Every hook that could disagree with a developer's machine
+# supplies its own tool at a pinned version -- `clang-format` is `language:
+# python` and installs the pinned `clang-format` wheel, so it never touches the
+# `clang-format-18` in dev-cpu -- which means a plain runner formats byte for
+# byte the same as the container. Running this inside dev-cpu would also make
+# linting wait for the image build, and deadlock on a pull request that changes
+# a Dockerfile.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pre-commit-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Hook environments are a dozen virtualenvs plus a Go toolchain for
+      # actionlint -- minutes of setup on a cold runner. They are keyed by hook
+      # repository and rev, so `.pre-commit-config.yaml` is the exact cache key:
+      # bump a rev and the affected environment is rebuilt. `restore-keys` makes
+      # that partial rather than total, since every unchanged hook in an older
+      # cache is still valid.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-py3.12-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: pre-commit-${{ runner.os }}-py3.12-
+
+      - run: pip install --quiet pre-commit
+
+      # --show-diff-on-failure prints what the formatters would have written, so
+      # a failure here is a patch to apply rather than a puzzle to reproduce.
+      - name: Run the commit-stage hooks
+        run: pre-commit run --all-files --show-diff-on-failure --color=always
+        env:
+          # `no-commit-to-branch` protects `main` from direct commits. It is a
+          # property of the developer's working branch, and it fails by
+          # construction in the one place it cannot mean anything: the push
+          # event *on* main, after the pull request that carried the change has
+          # already been reviewed and merged.
+          SKIP: no-commit-to-branch
+
+      # The pre-push tier is empty today; Doxygen's documentation-coverage check
+      # goes here, because it needs the whole tree but no configured build. It
+      # is run separately because `default_stages: [pre-commit]` means the step
+      # above does not pick it up -- and a check only a local `git push` enforces
+      # is one that `--no-verify` disables for good.
+      - name: Run the push-stage hooks
+        run: pre-commit run --all-files --hook-stage pre-push --show-diff-on-failure --color=always

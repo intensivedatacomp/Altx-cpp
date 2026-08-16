@@ -982,7 +982,24 @@ only one source.
 | `release.yml`       | push of git tag `v*`                               | rebuild all, version tags, Trivy gating, GitHub release  |
 | `docs.yml`          | push to `main`, git tag                            | Doxygen to GitHub Pages                                  |
 
-Only `docker-images.yml` exists so far; the rest arrive with the code they test. The separate
+`pre-commit.yml` and `docker-images.yml` exist so far; the rest arrive with the code they test.
+
+Two decisions inside `pre-commit.yml` that are not obvious from the table:
+
+- **`SKIP=no-commit-to-branch`.** That hook is a statement about the branch a developer is working
+  on. The one place it would ever fire in CI is the push event *on* `main` -- after the pull
+  request carrying the change has been reviewed and merged -- where it can only fail a job for
+  something no longer preventable.
+- **It does not run inside `dev-cpu`.** [Keeping the hook and the image in
+  agreement](#keeping-the-hook-and-the-image-in-agreement) argues for running `pre-commit` in the
+  container, and that is still the right advice for a *developer*, whose editor and manual
+  `clang-format` invocations use the image's binary. It is not needed for the hook itself:
+  `mirrors-clang-format` is a `language: python` hook that installs the pinned `clang-format`
+  wheel, so it never touches `/usr/bin/clang-format-18` and a plain runner formats identically. The
+  `rev` pin is what enforces agreement, in every context. Using the image here would also make
+  linting wait on the image build, and deadlock on a pull request that changes a Dockerfile.
+
+The separate
 `cleanup.yml` originally planned here is **not** wanted: registry pruning is a `prune` job inside
 `docker-images.yml`, because what a build supersedes is known exactly at the moment it publishes
 and only approximately a week later. See [Registry hygiene](#registry-hygiene).

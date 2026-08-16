@@ -50,6 +50,9 @@ clang-tidy is deliberately *not* a commit hook: it needs `compile_commands.json`
 after CMake has configured a build directory. A hook that silently skips when that file is missing
 gives different results to different developers, which is worse than not having the check at all.
 
+The first two tiers also run in CI — see @ref quality_ci. `pre-commit install` is per-clone and
+`--no-verify` bypasses it, so the local hooks are a fast path, not the enforcement point.
+
 The tiers are kept disjoint. `default_stages: [pre-commit]` in `.pre-commit-config.yaml` means a
 hook runs at commit time only, unless it explicitly says `stages: [pre-push]`.
 
@@ -206,6 +209,26 @@ needs — paid once in the image rather than over the network in every fresh con
 `docker/images.yaml`. Because the cache is baked in, it is part of the image's content hash:
 bumping a hook `rev` rebuilds the image. Without that entry the baked environments would quietly
 stop matching the configuration.
+
+@section quality_ci In CI
+
+`.github/workflows/pre-commit.yml` runs the same hooks over the whole tree on every pull request
+and on every push to `main`. Two steps, one per local tier: the commit-stage hooks, then the
+push-stage ones. A cold run takes about a minute; `~/.cache/pre-commit` is cached, keyed on
+`.pre-commit-config.yaml`, so bumping one hook's `rev` rebuilds only that environment.
+
+`no-commit-to-branch` is skipped there, via `SKIP=no-commit-to-branch`. It is a statement about the
+branch a developer is working on, and the one place it would fire in CI is the push event *on*
+`main` — after the pull request carrying the change has already been reviewed and merged.
+
+@note The job does **not** run inside `dev-cpu`, and does not need to. Every hook supplies its own
+tool at a pinned version: `clang-format` is a `language: python` hook that installs the pinned
+`clang-format` wheel and never touches the `clang-format-18` in the image. A plain runner therefore
+formats byte for byte the same as the container. Running the linters inside the image would also
+make them wait on the image build, and deadlock on a pull request that changes a Dockerfile.
+
+`--show-diff-on-failure` is passed, so when a formatter fails the log contains the patch to apply
+rather than only the news that something was wrong.
 
 @section quality_upgrading Upgrading the hooks
 
