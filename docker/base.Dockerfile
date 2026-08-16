@@ -6,6 +6,8 @@ FROM ${BASE_CPU} AS base-cpu
 FROM ${BASE_GPU} AS base-gpu
 FROM base-${FLAVOR} AS final
 
+LABEL org.opencontainers.image.description="Base image for the Altx C++ project: Ubuntu 24.04 with OpenBLAS, LAPACKE, HDF5 and OpenMP system libraries."
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 # `apt-get upgrade` before the install, and hadolint's DL3005 is silenced for

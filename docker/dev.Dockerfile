@@ -1,6 +1,8 @@
 ARG BASE_IMAGE=ghcr.io/intensivedatacomp/altx-cpp/base-cpu:edge
 FROM ${BASE_IMAGE}
 
+LABEL org.opencontainers.image.description="Development image for the Altx C++ project: compiler toolchain, clangd/clang-format/clang-tidy, Vim, pre-commit and uv-managed Python on top of base-cpu."
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 # `apt-get upgrade` for the same reason as in base.Dockerfile, and repeated
