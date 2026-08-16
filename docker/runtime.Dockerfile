@@ -8,6 +8,7 @@ RUN cmake --preset cpu-serial-release && cmake --build --preset cpu-serial-relea
     cmake --preset cpu-omp-release    && cmake --build --preset cpu-omp-release
 
 FROM ${BASE_IMAGE}
+LABEL org.opencontainers.image.description="Minimal runtime image for the Altx C++ project: the compiled altx binaries (serial and OpenMP) on top of base-cpu."
 COPY --from=builder /src/build/cpu-serial-release/apps/altx /usr/local/bin/altx-serial
 COPY --from=builder /src/build/cpu-omp-release/apps/altx    /usr/local/bin/altx-omp
 
