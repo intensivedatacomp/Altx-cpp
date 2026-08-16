@@ -2,7 +2,14 @@ ARG BASE_IMAGE=ghcr.io/intensivedatacomp/altx-cpp/base-cpu:edge
 FROM ${BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
+
+# `apt-get upgrade` for the same reason as in base.Dockerfile, and repeated
+# rather than inherited: the two images have independent content hashes, so a
+# rebuild of this one does not imply a rebuild of its parent. Without the line
+# here, a dev image rebuilt six months after base-cpu last changed would ship
+# base-cpu's six-month-old system packages.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     ninja-build \
@@ -41,6 +48,10 @@ RUN update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-18 100 
 # uv config
 # ---------------------------
 COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /usr/local/bin/uv
+
+# UV_LINK_MODE=copy is what makes `uv cache clean` safe further down: the
+# default hardlinks installed files back to ~/.cache/uv, so deleting the cache
+# would gut the installation it was meant to speed up.
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
 ARG UID=1000
@@ -95,7 +106,12 @@ RUN git config --global --add safe.directory /workspace && \
 # `uvx`: uvx resolves into an ephemeral cache directory, so the git hook that
 # `pre-commit install` writes points at a path `uv cache clean` may delete, and
 # every `git commit` afterwards fails with "`pre-commit` not found".
-RUN uv tool install pre-commit
+#
+# `uv cache clean` in the same RUN, not a later one: a file deleted in a later
+# layer still occupies the earlier one, so the size is only reclaimed when the
+# creation and the deletion share a layer. (Trivy is the exception -- it scans
+# the squashed filesystem -- but this is worth having for both reasons.)
+RUN uv tool install pre-commit && uv cache clean
 
 # uv puts tool shims here. Also what the generated git hook falls back to.
 ENV PATH="${HOME}/.local/bin:${PATH}"
@@ -121,10 +137,61 @@ ENV PATH="${HOME}/.local/bin:${PATH}"
 # deletes the directory it is standing in, and a later instruction inheriting a
 # working directory that no longer exists fails the build.
 COPY --chown=${UID}:${GID} .pre-commit-config.yaml /tmp/precommit/.pre-commit-config.yaml
+#
+# The pruning at the end of that RUN is not housekeeping. It is the whole
+# reason this image passes its Trivy gate. `install-hooks` leaves behind the
+# machinery it used to build the environments, and that machinery -- not the
+# tools anyone runs -- is what carries the findings:
+#
+#   * pre-commit's `language: golang` builds `go install ./...`, so the
+#     actionlint repository yields five binaries, of which the hook entry point
+#     is one. `generate-webhook-events` is a code generator that nothing in this
+#     image will ever run, and it is the only one of the five linked against
+#     golang.org/x/net -- five HIGH findings from a binary with no purpose here.
+#     It brought a 270 MB Go toolchain with it, which is likewise finished the
+#     moment the binaries exist.
+#   * every hook virtualenv is seeded with pip, and pip vendors its own
+#     dependency tree (msgpack, setuptools/pkg_resources, cachecontrol, ...).
+#     Nine copies of pip is nine copies of every advisory against those, for an
+#     installer that has already done its job: pre-commit keys an environment
+#     directory on the hook repository, its rev and its additional_dependencies,
+#     so changing any of them builds a *new* environment with a fresh pip rather
+#     than reusing this one.
+#
+# So: everything the RUN deletes is build-time-only by construction. What
+# survives is the hook entry points and their libraries, which is what a
+# container actually runs. Verified by scripts/build_docker_images_locally.sh,
+# which runs the full hook suite against this repository in the finished image
+# -- if a prune here ever takes something a hook needs, that smoke test is
+# where it surfaces.
+#
+# It has to happen inside this RUN. A file deleted in a later layer is still
+# present in the earlier one and still counts against the image size; only the
+# Trivy result would improve.
+#
+# `! -name actionlint` names the one golang hook this repository has. A second
+# one means adding its entry point here, and the smoke test is what says so.
+# The closing assertion is the cheap version of that check, and it is written
+# with `find -print -quit` rather than `find | head -1` for the reason
+# runtime.Dockerfile records against DL4006: a pipe throws away find's own exit
+# status, so a broken find would look like a passing test.
 WORKDIR /tmp/precommit
 RUN git init -q . && \
     pre-commit install-hooks && \
-    rm -rf /tmp/precommit
+    rm -rf /tmp/precommit && \
+    find "${HOME}/.cache/pre-commit" -path '*/golangenv-*/bin/*' \
+        -type f ! -name actionlint -delete && \
+    find "${HOME}/.cache/pre-commit" -type d -path '*/golangenv-*/.go' \
+        -prune -exec rm -rf {} + && \
+    find "${HOME}/.cache/pre-commit" -type d -path '*/site-packages/*' \
+        \( -name pip -o -name 'pip-*.dist-info' \
+           -o -name pkg_resources -o -name setuptools \
+           -o -name 'setuptools-*.dist-info' \) -prune -exec rm -rf {} + && \
+    find "${HOME}/.cache/pre-commit" -path '*/py_env-*/bin/pip*' -delete && \
+    rm -rf "${HOME}/.cache/go-build" "${HOME}/.cache/pip" \
+           "${HOME}/.cache/virtualenv" && \
+    [ -n "$(find "${HOME}/.cache/pre-commit" \
+        -path '*/golangenv-*/bin/actionlint' -type f -perm -u+x -print -quit)" ]
 WORKDIR /workspace
 
 # ---------------------------

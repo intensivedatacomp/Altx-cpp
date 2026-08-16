@@ -80,8 +80,18 @@ GITHUB_TOKEN=<a token with read:packages> python3 scripts/ci/prune_packages.py
 It reports only; deleting needs an explicit `--delete`.
 
 Every image is scanned with Trivy and the findings are uploaded to the repository's Security tab,
-one category per image. Development images are report-only; runtime images will fail the build on
-HIGH or CRITICAL findings. Suppressions go in `.trivyignore` at the repository root.
+one category per image. **Every image fails the build on a HIGH or CRITICAL finding**, development
+images included, and the scan runs with `ignore-unfixed: true` so only findings someone can act on
+count. Suppressions go in `.trivyignore` at the repository root, one CVE per line with a reason and
+an expiry.
+
+The findings a development image accumulates are not usually the compiler and debugger it ships;
+they are what the *build* left behind. `dev-cpu` bakes `~/.cache/pre-commit` in, and
+`pre-commit install-hooks` leaves a Go toolchain, four unused code-generator binaries from the
+actionlint repository, and one copy of `pip` — with pip's whole vendored dependency tree — in
+every hook virtualenv. `docker/dev.Dockerfile` prunes all of it in the same layer that creates it,
+which is both what clears the scan and what takes about 590 MB off the image — `~/.cache` inside
+`dev-cpu` measures 407 MB where it used to measure 993 MB.
 
 @section devenv_building Building the images
 

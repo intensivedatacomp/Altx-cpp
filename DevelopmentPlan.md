@@ -688,10 +688,27 @@ Three things that turned out to matter when `dev.Dockerfile` was wired up this w
   The cache is baked, so it is part of the image's identity: bumping a hook `rev` has to rebuild
   the image. Without that entry the baked environments silently stop matching the configuration,
   which is precisely the cost this layer exists to avoid paying twice.
-- **The cache is not small.** `install-hooks` materialises a virtualenv per Python hook, downloads
-  binaries for hadolint and shellcheck, and fetches an entire Go toolchain for `actionlint`, whose
-  hook is `language: golang`. That is the trade: image size, once, against every fresh container
-  rebuilding it over the network.
+- **The cache is not small, and most of what makes it big is not needed after the build.**
+  `install-hooks` materialises a virtualenv per Python hook, downloads binaries for hadolint and
+  shellcheck, and fetches an entire Go toolchain for `actionlint`, whose hook is `language:
+  golang`. That is the trade: image size, once, against every fresh container rebuilding it over
+  the network. But the trade is much better than it first looked, because three parts of that are
+  purely build-time:
+
+  | Leftover | Size | Why it can go |
+  | --- | --- | --- |
+  | Go toolchain + module cache | 270 MB | The five binaries it produced are static; nothing re-links them |
+  | `pip` in nine hook virtualenvs | 101 MB | pre-commit keys an environment on repo + rev + `additional_dependencies`, so changing any of them builds a *new* environment with a fresh `pip` rather than reusing this one |
+  | Four unused `go install ./...` binaries | ~50 MB | `actionlint` is the hook entry point; the rest are that project's own code generators |
+
+  Pruning them, plus `~/.cache/{go-build,pip,virtualenv,uv}`, takes the hook cache from 796 MB to
+  386 MB and `~/.cache` as a whole from 993 MB to 407 MB. It must happen **inside the `RUN` that
+  creates them** -- a file deleted in a later layer still occupies the earlier one, so a separate
+  cleanup layer would improve only the Trivy result, not the size.
+
+  It also *is* the Trivy result: see [Vulnerability scanning](#vulnerability-scanning). The prune
+  is the one place in these Dockerfiles where a later edit can silently break a hook, so
+  `scripts/build_docker_images_locally.sh` runs the whole suite inside the finished image.
 
 ### Vim
 
@@ -753,9 +770,46 @@ There should be debuggers and profilers in the development images:
 
 ### Vulnerability scanning
 
-Images are scanned with Trivy in CI. Runtime images **fail** the build on HIGH or CRITICAL
-findings; development images are **report-only**, since compilers, debuggers and VTune guarantee
-a permanent backlog of findings that would otherwise block all work.
+Images are scanned with Trivy in CI. **Every image fails the build on a HIGH or CRITICAL finding**,
+development images included.
+
+> **Revised.** This section originally made development images report-only, on the reasoning that
+> compilers, debuggers and VTune guarantee a permanent backlog of findings that would otherwise
+> block all work. Measurement did not support it. Scanned with `ignore-unfixed: true`, `dev-cpu`
+> produced seven HIGH findings and `base-cpu` none, and not one of the seven came from the
+> toolchain:
+>
+> * five from `generate-webhook-events`, one of the five binaries pre-commit's `language: golang`
+>   produces from the actionlint repository via `go install ./...`. It is a code generator for that
+>   project's own source tree, it is the only one of the five linked against `golang.org/x/net`,
+>   and nothing in the image ever runs it;
+> * two from the `pip` that seeds every hook virtualenv -- `msgpack` and `setuptools`, both reached
+>   through pip's vendored dependency tree rather than installed on their own account, and counted
+>   once per virtualenv.
+>
+> Both are build-time leftovers, so the fix is to prune them in the layer that creates them rather
+> than to accept them: see
+> [Python in the images](#python-in-the-images-light-only-installed-with-uv). A backlog that turns
+> out to be empty is not a reason to switch the alarm off, and the reasoning above would have kept
+> it off permanently while the actual findings had nothing to do with the premise.
+>
+> Two consequences worth stating. The gate is now the thing that notices when a *new* leftover
+> arrives -- a hook added in a language whose toolchain outlives its output, say -- which is exactly
+> the class of problem that would otherwise go unexamined for months. And `.trivyignore` stops
+> being decoration: it is the only release valve, so an entry there needs a reason and an expiry.
+>
+> The operational consequence to plan for: because the scan runs even when the build is *skipped*
+> (an unchanged image still accumulates CVEs), a new advisory against a package in `base-cpu` will
+> start failing every pull request, including ones that touch no Dockerfile. The remedy is a
+> rebuild, and a rebuild only happens when the content hash changes -- so it takes an edit to the
+> Dockerfile. `apt-get upgrade` is what makes that edit *sufficient*; before it, rebuilding
+> refreshed only the packages the Dockerfile names. The remaining gap is that nothing rebuilds on a
+> schedule, which is `nightly.yml`'s job when it arrives.
+>
+> What this does **not** change: VTune. It stays behind `ARG WITH_VTUNE=0`, and if the 2--3 GB
+> Intel layer does turn out to carry an irreducible backlog, the per-image `trivy:` override in
+> `docker/images.yaml` is still there -- the mechanism was never removed, only its default
+> flipped.
 
 Size expectation: `runtime-cpu` in the low hundreds of MB, `runtime-gpu` several GB. The ROCm
 layer dominates and is reduced by installing the ROCm *runtime* rather than the full SDK in the
@@ -1128,10 +1182,10 @@ attention belongs on the page above.
 
 Vulnerability scanning follows `docker-builder`: Trivy with `scanners: vuln`, SARIF uploaded to
 the GitHub Security tab under a per-image category, `ignore-unfixed: true` and a `.trivyignore`.
-The difference is the gating, described under
-[Vulnerability scanning](#vulnerability-scanning): runtime images fail on HIGH or CRITICAL,
-development images are report-only. Each image is scanned in its own build job -- hence the
-per-image category, without which every upload would resolve the previous image's alerts as fixed.
+Every image gates on HIGH or CRITICAL, for the reasons recorded under
+[Vulnerability scanning](#vulnerability-scanning). Each image is scanned in its own build job --
+hence the per-image category, without which every upload would resolve the previous image's alerts
+as fixed.
 
 Two details that are not obvious:
 

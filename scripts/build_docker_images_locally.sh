@@ -308,6 +308,55 @@ PROBE
     fi
 }
 
+# The pre-commit cache is baked into dev-cpu and then pruned in the same layer,
+# because most of what `install-hooks` downloads -- a Go toolchain, a `pip` per
+# virtualenv -- is build-time machinery that would otherwise sit in the image
+# carrying advisories against it. That prune is the one edit in these
+# Dockerfiles that can break a hook without breaking the build, so run the
+# whole suite in the finished image and let it say so here rather than in
+# someone's first commit.
+#
+# The repository is copied in rather than bind-mounted read-only: several hooks
+# rewrite files (trailing-whitespace, ruff format), and `run --all-files` needs
+# a git repository it may touch. A failing hook is not the same as a broken
+# image, so a non-zero exit is reported and not fatal -- what matters is that
+# every hook *ran*.
+smoke_precommit() {
+    step "Smoke: pre-commit hooks run offline in ${DEV_IMG}"
+
+    local out status=0
+    out=$(docker run --rm --network none \
+            -v "${REPO_ROOT}:/repo:ro" --entrypoint /bin/bash "${DEV_IMG}" -lc '
+        set -e
+        cp -r /repo /tmp/w && cd /tmp/w
+        git config --global user.email smoke@localhost
+        git config --global user.name  smoke
+        [ -d .git ] || git init -q .
+        git add -A >/dev/null 2>&1 || true
+        pre-commit run --all-files
+    ' 2>&1) || status=$?
+
+    # `--network none` is the actual assertion. An environment the prune damaged
+    # makes pre-commit try to rebuild it, which without a network fails loudly
+    # instead of silently repairing itself and hiding the defect.
+    local ran
+    ran=$(printf '%s\n' "$out" | grep -cE '(Passed|Failed|Skipped)$' || true)
+
+    if printf '%s\n' "$out" | grep -qiE 'Installing environment|InstallError|executable .* not found'; then
+        printf '%s\n' "$out" | tail -30
+        die "a hook environment did not survive the cache prune in docker/dev.Dockerfile"
+    elif (( ran == 0 )); then
+        printf '%s\n' "$out" | tail -30
+        die "no hooks ran -- pre-commit could not start inside ${DEV_IMG}"
+    elif (( status != 0 )); then
+        ok "${ran} hooks ran offline"
+        warn "some hooks reported findings (exit ${status}); that is a repository issue, not an image one:"
+        printf '%s\n' "$out" | grep -E 'Failed$' || true
+    else
+        ok "${ran} hooks ran offline, all passed"
+    fi
+}
+
 smoke_runtime() {
     step "Smoke: ${RUNTIME_IMG}"
 
@@ -329,6 +378,7 @@ if (( RUN_SMOKE )); then
     smoke_base
     if [[ "$TARGET" != base ]]; then
         smoke_dev
+        smoke_precommit
     fi
     if [[ "$TARGET" == runtime || "$TARGET" == all ]]; then
         smoke_runtime

@@ -7,7 +7,20 @@ FROM ${BASE_GPU} AS base-gpu
 FROM base-${FLAVOR} AS final
 
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
+
+# `apt-get upgrade` before the install, and hadolint's DL3005 is silenced for
+# it rather than obeyed. The rule assumes an upgrade makes a build
+# irreproducible; here the opposite is true. The base image is pinned by
+# digest, so it is frozen at whatever noble-updates and noble-security held on
+# the day that digest was published -- typically months of unapplied fixes in
+# packages this image never installs and therefore never refreshes. That is
+# exactly where the libsystemd0 / libudev1 / libkrb5 findings came from.
+# Reproducibility is not lost, because it was never bought here: DL3008 is
+# already silenced for the same reason (Ubuntu keeps one version per package),
+# and the real guarantee is that scripts/ci/images.py hashes this file byte for
+# byte, so the image identity tracks its contents.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
         libopenblas0-openmp \
         liblapacke \
         libhdf5-103-1t64 \

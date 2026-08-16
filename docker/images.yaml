@@ -43,7 +43,17 @@ defaults:
   cache: true           # registry-backed buildx cache, one ref per image
   trivy:
     severity: [CRITICAL, HIGH]
-    fail: false         # report-only unless an image says otherwise
+    # Every image gates, development images included. The original plan made
+    # them report-only on the assumption that a compiler and debugger toolchain
+    # guarantees a permanent backlog no one can act on. That assumption did not
+    # survive contact with the scanner: with `ignore-unfixed: true`, the only
+    # HIGH findings dev-cpu ever had came from build-time leftovers in
+    # ~/.cache/pre-commit -- an unused Go code generator and nine copies of pip
+    # -- and both are now pruned in docker/dev.Dockerfile. gcc, gdb and clang
+    # contributed nothing. A backlog that turns out to be empty is not a reason
+    # to switch the alarm off, so the gate applies everywhere and `.trivyignore`
+    # is the documented, dated way to accept a specific finding.
+    fail: true
 
 # ---------------------------------------------------------------------------
 # Images
@@ -106,8 +116,6 @@ images:
       - src/**
       - apps/**
       - external/**
-    trivy:
-      fail: true        # runtime images gate on HIGH/CRITICAL, dev images do not
     moving_tag: edge
 
   runtime-cpu-mpi:
@@ -127,8 +135,6 @@ images:
       - src/**
       - apps/**
       - external/**
-    trivy:
-      fail: true
     moving_tag: edge
 
   dev-gpu:
@@ -162,8 +168,6 @@ images:
       - src/**
       - apps/**
       - external/**
-    trivy:
-      fail: true
     moving_tag: edge
 
 # ---------------------------------------------------------------------------

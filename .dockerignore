@@ -1,0 +1,60 @@
+# Build context filter. Every image is built from the repository root -- runtime
+# needs the sources and dev needs docker/vim/ -- so without this file the whole
+# tree is uploaded to the daemon on every build, including a .venv and a pile of
+# linter caches that no Dockerfile reads.
+#
+# This is *not* the same list as .gitignore, and copying one into the other
+# would be a mistake in both directions. .gitignore answers "should this be
+# committed"; this file answers "does any Dockerfile read this". Build outputs
+# are excluded here because a stale local build/ directory silently landing in
+# an image is worse than a slow upload.
+#
+# Note what this does not affect: an image's content hash. scripts/ci/images.py
+# hashes the Dockerfile plus the explicit `inputs` globs from docker/images.yaml,
+# so excluding a path here can never make a rebuild stop happening.
+
+# CI metadata: read by nothing inside any image.
+.github
+.gitignore
+.dockerignore
+
+# `.git` is deliberately NOT excluded. runtime.Dockerfile does `COPY . .` and
+# then configures CMake, which derives the version from `git describe --tags
+# --dirty` at build time -- see the version invariant in CLAUDE.md. Excluding it
+# would not fail the build; it would silently stamp every released binary and
+# every output file's provenance with an unknown version, which is worse.
+
+# Local development environments and tool caches
+.venv
+venv
+.mypy_cache
+.ruff_cache
+.pytest_cache
+__pycache__
+*.py[cod]
+.cache
+.vscode
+.idea
+
+# Build outputs -- CMake writes these at the repository root by default, and
+# runtime.Dockerfile configures its own build directory inside the image.
+build
+build-*
+out
+docs/html
+docs/latex
+compile_commands.json
+
+# Data and results: large, never an image input, and .h5 in particular is what
+# the round-trip tests write next to the sources.
+*.h5
+*.hdf5
+*.log
+*.o
+*.so
+*.a
+
+# Editor and OS noise
+*.swp
+*~
+.DS_Store

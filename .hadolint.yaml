@@ -16,6 +16,17 @@ ignored:
   # `rocm/dev-ubuntu-24.04@sha256:439e...`, by digest rather than by tag.
   - DL3006
 
+  # "Do not use apt-get upgrade or dist-upgrade."
+  #
+  # The rule's premise is that an upgrade makes a build non-deterministic. That
+  # trade was already made here for DL3008 below, and refusing it for DL3005
+  # buys nothing while costing real CVEs: the base images are pinned by digest,
+  # so every package the Dockerfile does *not* explicitly install stays frozen
+  # at whatever the digest shipped with. libsystemd0, libudev1 and libkrb5 are
+  # in that set, and all three were carrying fixed-upstream advisories for
+  # exactly that reason. `apt-get upgrade` is the only thing that reaches them.
+  - DL3005
+
   # "Pin versions in apt-get install."
   #
   # A deliberate policy decision, not an oversight. Ubuntu's archive keeps only
