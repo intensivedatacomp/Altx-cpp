@@ -195,6 +195,50 @@ RUN git init -q . && \
 WORKDIR /workspace
 
 # ---------------------------
+# Python for people, not for pre-commit
+# ---------------------------
+# `python` and `python3` resolve to a uv-managed CPython 3.14 -- the version
+# scripts/gen_reference.py and the docker-builder image already use, so a helper
+# script behaves the same in both places. Ubuntu 24.04's own python3.12 stays
+# where it is under /usr/bin; nothing is replaced, `${HOME}/.local/bin` simply
+# comes first on PATH. `python` in particular does not otherwise exist here at
+# all: Ubuntu ships no unversioned alias, and the 3.12 present at all is an
+# accident of vim-nox depending on it.
+#
+# **This step must stay after the pre-commit layer.** `uv tool install` resolves
+# the *default* interpreter, so installing 3.14 first would build pre-commit's
+# tool environment on 3.14, and its hook environments with it -- turning the
+# baked `py_env-python3.12` directories into cache misses that a fresh container
+# would try to rebuild over the network. Some pinned hooks would not survive
+# that: mypy 1.10.0 predates 3.14 and has no wheel for it.
+#
+# What makes this safe rather than merely ordered: pre-commit resolves its
+# default interpreter from its own `sys.executable`, not from `python3` on PATH,
+# so the shims below are invisible to it. Verified -- the hook environments stay
+# `py_env-python3.12` and no hook reinstalls. smoke_precommit in
+# scripts/build_docker_images_locally.sh runs the suite with `--network none`,
+# which is what turns a regression here into a failed build instead of a slow
+# first commit.
+#
+# The `pip` removal is the same finding as the pre-commit prune, arriving by a
+# different route: a python-build-standalone interpreter ships pip *extracted*
+# into site-packages, and trivy reads pip's vendored dependency list from there
+# -- msgpack and setuptools, neither installed on its own account. Nothing here
+# needs it. `uv pip install` is the documented way to install a package in this
+# image and does not use pip at all, and `python -m venv` still works because
+# ensurepip's bundled wheel is left alone. That wheel is also the way back:
+# `python -m ensurepip` restores pip for anyone who genuinely wants it, which is
+# why the wheel stays and only the extracted copy goes. Trivy does not look
+# inside a .whl, so the wheel costs nothing.
+ARG PYTHON_VERSION=3.14
+RUN uv python install "${PYTHON_VERSION}" --default && \
+    uv cache clean && \
+    rm -rf "$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"/pip \
+           "$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"/pip-*.dist-info && \
+    test "$(python --version)" = "$(python3 --version)" && \
+    python3 -c "import sys; assert sys.version_info[:2] == tuple(int(p) for p in '${PYTHON_VERSION}'.split('.')), sys.version"
+
+# ---------------------------
 # Vim config
 # ---------------------------
 RUN curl -fLo ${HOME}/.vim/autoload/plug.vim --create-dirs \

@@ -231,7 +231,7 @@ smoke_base() {
 smoke_dev() {
     step "Smoke: ${DEV_IMG}"
 
-    for tool in g++ cmake ninja gdb git vim clangd clang-format doxygen uv; do
+    for tool in g++ cmake ninja gdb git vim clangd clang-format doxygen uv python python3; do
         local version
         if version=$(in_image "${DEV_IMG}" "command -v ${tool} >/dev/null && ${tool} --version 2>&1 | head -1"); then
             # Not `A && B || C`: if `ok` ever returns non-zero, C would run too.
@@ -242,6 +242,22 @@ smoke_dev() {
             fi
         else
             die "${tool} not found in ${DEV_IMG}"
+        fi
+    done
+
+    # `python` and `python3` must be the uv-managed interpreter, not Ubuntu's
+    # python3.12 -- which is present only because vim-nox depends on it, and
+    # which would otherwise win whenever the uv shims failed to install. Both
+    # names are checked: `python` is the one Ubuntu does not provide at all, so
+    # it is the one that silently goes missing.
+    local py_expected py_actual
+    py_expected=$(awk -F= '/^ARG PYTHON_VERSION=/ { print $2 }' "${DOCKER_DIR}/dev.Dockerfile")
+    for py in python python3; do
+        py_actual=$(in_image "${DEV_IMG}" "${py} -c 'import sys; print(\"%d.%d\" % sys.version_info[:2])'" | tr -d '\r')
+        if [[ "$py_actual" == "$py_expected" ]]; then
+            ok "${py}: ${py_actual} (uv-managed)"
+        else
+            die "${py} is ${py_actual:-missing}, expected ${py_expected} -- did 'uv python install --default' run?"
         fi
     done
 

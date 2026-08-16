@@ -98,6 +98,31 @@ every hook virtualenv. `docker/dev.Dockerfile` prunes all of it in the same laye
 which is both what clears the scan and what takes about 590 MB off the image — `~/.cache` inside
 `dev-cpu` measures 407 MB where it used to measure 993 MB.
 
+@section devenv_python Python in the container
+
+`python` and `python3` are a uv-managed CPython 3.14, matching the image `scripts/gen_reference.py`
+runs in — so a helper script behaves the same in both places:
+
+```console
+$ python3 --version
+Python 3.14.7
+```
+
+Ubuntu's own `python3.12` is untouched at `/usr/bin/python3.12`; the uv shims in
+`~/.local/bin` simply come first on `PATH`. There is no unversioned `python` on Ubuntu at all, so
+that name comes entirely from uv.
+
+`pip` is **not** installed into it. Use `uv pip install` — it is the documented tool here, and it
+is what keeps the image's Trivy gate clean, since an extracted `pip` drags its whole vendored
+dependency tree into the scan. `python -m venv` is unaffected. If you genuinely need pip itself,
+`python -m ensurepip` puts it back from the wheel that ships with the interpreter.
+
+@note `pre-commit` deliberately does **not** use it. Its hook environments are built on the 3.12
+that its own interpreter reports, are baked into the image, and would have to be rebuilt over the
+network if that changed — and not every pinned hook has a 3.14 wheel. This is why
+`docker/dev.Dockerfile` installs 3.14 *after* the pre-commit layer, and why the smoke tests run the
+hooks with no network.
+
 @section devenv_building Building the images
 
 ```bash

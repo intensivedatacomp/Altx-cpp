@@ -665,6 +665,30 @@ For the light Python that does live in `dev-cpu` and `dev-gpu`, the answer to
 - Fast enough that the layer stops being something to think about.
 - `UV_COMPILE_BYTECODE=1`, `UV_LINK_MODE=copy`, a **pinned** uv version rather than `latest`, and a
   lock file, so the image is reproducible.
+- `uv python install 3.14 --default`, so that `python` and `python3` in the container are the same
+  interpreter version as `ghcr.io/halmosb/docker-builder/python:3.14-cpu`, where
+  `scripts/gen_reference.py` runs. A helper script then behaves identically in both places instead
+  of being written against whatever Ubuntu happens to ship. `python` is not a rename of anything:
+  Ubuntu provides no unversioned alias at all, and the python3.12 that exists is incidental --
+  `vim-nox` depends on it. Both stay under `/usr/bin`; `${HOME}/.local/bin` merely comes first.
+
+  **The order of that step against the pre-commit layer is load-bearing, in both directions.** It
+  must come *after*, because `uv tool install` resolves the default interpreter: install 3.14 first
+  and pre-commit's tool environment is built on 3.14, and its hook environments with it, so the
+  baked `py_env-python3.12` directories become cache misses a fresh container tries to rebuild over
+  the network -- and some pinned hooks would not survive it, mypy 1.10.0 having no 3.14 wheel. And
+  it is *safe* to come after only because pre-commit resolves its default interpreter from its own
+  `sys.executable` rather than from `python3` on PATH, so the shims are invisible to it. That was
+  measured, not assumed: with 3.14 as the default, the hook environments stay `py_env-python3.12`
+  and nothing reinstalls. `smoke_precommit` runs the suite with `--network none` so that a future
+  reordering fails the build rather than the next person's first commit.
+
+  The same step deletes the interpreter's extracted `pip`. A python-build-standalone build ships
+  one in `site-packages`, and it is the identical finding the pre-commit prune deals with -- trivy
+  reads pip's vendored `msgpack` and `setuptools` out of it -- reappearing by a different route.
+  `uv pip install` is what this image documents anyway, `python -m venv` is unaffected, and
+  ensurepip's bundled wheel stays, so `python -m ensurepip` restores pip for anyone who wants it.
+  Trivy does not open a `.whl`, so keeping the wheel costs nothing.
 
 **micromamba is the better tool for a job this project does not have.** Its real advantage is
 conda-forge's handling of native libraries -- an `h5py` genuinely built against the same MPI and

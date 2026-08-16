@@ -40,7 +40,8 @@ set smartcase          " ...unless uppercase is used
 set autoindent         " Indenting code
 set scrolloff=5        " Keep 5 lines visible above/below cursor
 set wildmenu           " Tab completion in command mode
-syntax on
+syntax on              " Set up syntax highlighting
+set spell              " Set up spell check
 
 " Enable 24-bit true color in terminals that support it
 if exists('+termguicolors')
