@@ -43,6 +43,31 @@ ignore = []
 convention = "numpy"
 
 # --------------------------------------------------
+# codespell -- typos, including in comments and documentation
+# --------------------------------------------------
+# Not a Python tool, but it reads `[tool.codespell]` from here, which keeps the
+# exception list next to ruff's and mypy's instead of in a fifth dotfile.
+
+[tool.codespell]
+
+# Nothing needs excusing yet. When something does, add
+#
+#     ignore-words-list = "<word>,<word>"
+#
+# -- comma-separated, lowercase, each entry earning a comment, since an
+# unexplained one is indistinguishable from a typo someone gave up on. The key
+# is absent rather than set to "" because codespell renders it as a bare `-L`
+# and argparse then rejects its own command line.
+#
+# Expect the mathematical vocabulary to need this as `src/` grows: codespell
+# corrects on edit distance, and short domain names are what it mistakes for
+# typos.
+
+# Directories that hold generated or third-party text. pre-commit passes the
+# changed files explicitly, so this only matters for a manual whole-tree run.
+skip = "./.git,./build,./docs/html,./.mypy_cache,./.ruff_cache,*.h5"
+
+# --------------------------------------------------
 # MyPy -- type checking
 # --------------------------------------------------
 

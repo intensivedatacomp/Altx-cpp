@@ -85,6 +85,11 @@ images:
       BASE_IMAGE: base-cpu
     inputs:
       - docker/vim/**
+      # Baked into the image: dev.Dockerfile runs `pre-commit install-hooks`, so
+      # a changed `rev` has to change this image's hash and rebuild it.
+      # Without this entry the cached hook environments quietly stop matching
+      # the configuration -- the exact failure that layer exists to prevent.
+      - .pre-commit-config.yaml
     moving_tag: edge
 
   runtime-cpu:
@@ -134,6 +139,7 @@ images:
       BASE_IMAGE: base-gpu
     inputs:
       - docker/vim/**
+      - .pre-commit-config.yaml   # same Dockerfile as dev-cpu; see there
     moving_tag: edge
 
   base-gpu:

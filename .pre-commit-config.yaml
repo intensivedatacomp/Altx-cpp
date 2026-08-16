@@ -41,6 +41,74 @@ repos:
         # exists at the moment of committing.
         args: [ '--branch', 'main', '--branch', 'master' ]
 
+  # --- clang-format (C/C++/CUDA formatting) ---
+  # The `rev` and the clang-format-18 that docker/dev.Dockerfile installs must
+  # stay equal: clang-format output differs between major versions, so a
+  # mismatch is an endless reformatting loop between one developer and CI.
+  # v18.1.3 is what Ubuntu 24.04 ships as `clang-format-18`. Change one, change
+  # the other -- and running pre-commit inside dev-cpu makes them identical by
+  # construction. Style lives in .clang-format.
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v18.1.3
+    hooks:
+      - id: clang-format
+        # The hook's own default also claims json, javascript, java and proto.
+        # clang-format is not this project's formatter for any of those, and
+        # letting it near .json in particular would fight the JSON that CI
+        # writes. `.hip`, when src/hip/ exists, is not a type `identify` knows
+        # and will need adding here explicitly.
+        types_or: [c, c++, cuda]
+
+  # --- gersemi (CMake formatting) ---
+  # No CMakeLists.txt exists yet -- stage 2 writes the first one. Configured now
+  # so that one arrives formatted instead of being reformatted later in a commit
+  # that touches every line of it.
+  #
+  # The hook lives in a separate repository from gersemi itself: the manifest
+  # was moved out of BlankSpruce/gersemi at 0.27.1, so pinning the tool repo
+  # fails with "`.pre-commit-hooks.yaml` is not a file". Both carry the same
+  # version tags.
+  #
+  # No `args`: the manifest already passes `-i`, and gersemi's default line
+  # length is 80, which is .clang-format's ColumnLimit -- so C++ and CMake wrap
+  # alike without saying so twice. Overriding `args` would drop the `-i`.
+  - repo: https://github.com/BlankSpruce/gersemi-pre-commit
+    rev: 0.28.0
+    hooks:
+      - id: gersemi
+
+  # --- Dockerfiles, workflows, shell ---
+  # The plan's reason for these three: this project carries far more non-C++
+  # configuration than the Python one did, and those are exactly the files where
+  # a mistake is invisible until CI runs. All three fetch their own binaries, so
+  # they add nothing to the image.
+  - repo: https://github.com/AleksaC/hadolint-py
+    rev: v2.15.1
+    hooks:
+      # This mirror ships the binary. The upstream `hadolint-docker` hook shells
+      # out to `docker run`, which cannot work inside the dev container the plan
+      # wants pre-commit run from.
+      - id: hadolint
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+
+  # --- codespell (typos, including in comments and documentation) ---
+  # Configured in pyproject.toml under [tool.codespell], where the exception
+  # list can carry a reason per word.
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.3
+    hooks:
+      - id: codespell
+        additional_dependencies: [tomli]
+
   # --- Ruff (fast lint + autofix, and formatting) ---
   # `ruff format` replaces black and the `D` rules replace pydocstyle, so neither
   # is a separate hook. Both are still in ../docker-builder for historical reasons.

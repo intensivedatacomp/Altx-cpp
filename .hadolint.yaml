@@ -1,0 +1,46 @@
+# hadolint configuration. Picked up automatically from the repository root, so
+# the pre-commit hook needs no --config argument.
+#
+# The split this file maintains: rules are silenced here only when hadolint is
+# either wrong about this repository or arguing with a decision the plan already
+# made. Anything hadolint is *right* about is fixed in the Dockerfile instead --
+# a config entry that hides a real defect is worse than not running the linter.
+
+ignored:
+  # "Always tag the version of an image explicitly."
+  #
+  # It fires on `FROM base-${FLAVOR} AS final` in base.Dockerfile, which names a
+  # *build stage*, not a registry image -- hadolint cannot resolve the ARG and
+  # assumes the worst. The images this actually pulls are pinned harder than the
+  # rule asks: `ubuntu:24.04@sha256:5616...` and
+  # `rocm/dev-ubuntu-24.04@sha256:439e...`, by digest rather than by tag.
+  - DL3006
+
+  # "Pin versions in apt-get install."
+  #
+  # A deliberate policy decision, not an oversight. Ubuntu's archive keeps only
+  # the current version of a package, so `apt-get install foo=1.2.3` starts
+  # failing the moment a security update lands -- pinning here buys
+  # reproducibility for a few weeks and then breaks the build outright.
+  #
+  # Reproducibility is bought elsewhere instead: the base images are pinned by
+  # digest, and scripts/ci/images.py hashes each Dockerfile byte for byte, so
+  # the package list is part of the image's identity and changing it rebuilds
+  # every descendant.
+  - DL3008
+
+  # "Potentially sensitive data should not be used in ARG or ENV."
+  #
+  # Matched on the name alone: `ARG USERNAME=non_root` in dev.Dockerfile is the
+  # unprivileged account the container runs as, not a credential. There is no
+  # secret in any image here, and none may be added -- the Dockerfiles are
+  # published to GHCR.
+  - DL3064
+
+  # "For some bash commands it makes no sense running them in a Docker
+  # container", listing `vim` among them.
+  #
+  # dev.Dockerfile runs `vim -es -u ... -c "PlugInstall! --sync" -c qa`, which
+  # is headless plugin installation at build time -- the one legitimate reason
+  # to invoke vim in a Dockerfile. The rule is aimed at interactive use.
+  - DL3001
