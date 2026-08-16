@@ -43,3 +43,18 @@ AccessModifierOffset: -4
 # default is Auto, which guesses per file and can misparse a construct it has
 # not seen an example of yet.
 Standard: c++20
+
+# Issue #6: require opening curly braces to be written on their own line
+# (Allman-style brace placement) instead of Google's default of attaching them
+# to the previous line. `Custom` keeps this an explicit, version-stable delta
+# rather than a full reformat dump.
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterControlStatement: Always
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterStruct: true
+  BeforeCatch: true
+  BeforeElse: true
