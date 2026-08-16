@@ -5,6 +5,7 @@
 Start an interactive development session with the repository mounted:
 
 ```bash
+docker pull ghcr.io/intensivedatacomp/altx-cpp/dev-cpu:edge
 docker run --rm -it -v "$PWD:/workspace" -w /workspace \
     ghcr.io/intensivedatacomp/altx-cpp/dev-cpu:edge
 ```
