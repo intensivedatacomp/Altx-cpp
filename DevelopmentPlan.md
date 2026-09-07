@@ -438,7 +438,32 @@ each result -- catching "works in CI only" before it becomes a debugging session
 
 Base images are pinned by **digest**, but individual apt package versions are not: Ubuntu drops
 old versions from the archive, so pinning them turns every base refresh into a maintenance task
-for very little additional reproducibility.
+for very little additional reproducibility. Both Dockerfiles therefore run `apt-get upgrade`, so
+that a digest-pinned base does not freeze months of unapplied security fixes into the image.
+
+**That upgrade needs a cache buster to mean anything**, which is not obvious and cost a red CI run
+to discover. An `apt-get upgrade` is only ever as fresh as the layer it lives in, and that layer's
+cache key is its own instruction text plus the parent image -- neither of which changes when a
+security update lands in the archive. buildx reuses the layer, and the image keeps the package set
+it had on the day that layer was *first* built, however often it is rebuilt afterwards. The
+instructions that usually change are further down the file (`docker/vim/vimrc` is copied in near
+the bottom of `dev.Dockerfile`), so the apt layers are almost always a cache hit and the upgrade
+almost always a no-op. A dev-cpu rebuilt on 2026-09-07 shipped `linux-libc-dev 6.8.0-137.137` from
+a layer built on 2026-08-16 and failed the Trivy gate on two kernel CVEs the archive had by then
+fixed twice over.
+
+`ARG APT_SNAPSHOT=<date>`, referenced in the apt `RUN`, closes it. Bumping the date invalidates
+that layer and everything after it, and -- because `scripts/ci/images.py` hashes the Dockerfile
+byte for byte -- also changes the image's content hash, so CI rebuilds rather than re-scanning the
+published image. It lives in the Dockerfile rather than in `images.yaml`'s `build_args` for the
+reason `images.yaml` already gives for the apt package list itself: the Dockerfile is hashed byte
+for byte, so a literal there is already covered, and putting it in `build_args` would need the same
+value kept in sync in two places and taught to `scripts/build_docker_images_locally.sh`, which
+passes its build arguments by hand.
+
+This gives the Trivy gate a feedback loop rather than a suppression list: a gate failure on a fixed
+CVE in an apt package means the archive is ahead of the image, and the bump is the answer.
+`.trivyignore` stays for fixes that are not ours to make.
 
 ### Presets map one-to-one onto images
 
@@ -774,8 +799,46 @@ The one thing that needs deliberate handling: **clangd does not understand `hipc
 `--query-driver`. Without this, the GPU sources are the only part of the codebase with no editor
 support, which is exactly where it would be missed most.
 
-The same image is used for VS Code through a `.devcontainer/devcontainer.json`, so both editors
-resolve symbols identically.
+**Accepting a completion is bound to `<Tab>` and `<Right>`**, alongside Vim's own `<C-y>`.
+`completeopt` is `menuone,noinsert,noselect,popup`, which `asyncomplete` needs to behave: without
+`noselect` Vim highlights the first candidate immediately, and a `<Tab>` that sometimes indents
+and sometimes accepts a candidate the user never looked at is worse than no binding. The cost of
+`noselect` is that accepting the obvious match would take two keystrokes, so both keys take the
+first match when nothing is highlighted yet and accept the highlighted one otherwise. They are
+`inoremap <expr>` mappings testing `pumvisible()`, not anything `asyncomplete`-specific, so they
+also cover Vim's built-in completions -- and `inoremap` rather than `imap` matters, since the keys
+an `<expr>` mapping returns are fed back as typed input and would otherwise match the mapping
+again.
+
+**One word list is shared between Vim and VS Code**: `spell/en.utf-8.add`, committed. It is the
+first entry of Vim's `'spellfile'`, so `zg` appends to it, and it is declared in
+`cspell.config.yaml` with `addWords: true`, so VS Code's "Add word to dictionary" appends to it
+too. The alternative -- Vim's `~/.vim/spell` inside a `--rm` container and VS Code's `cSpell.words`
+in a gitignored `.vscode/settings.json` -- gives every developer a private list that dies with the
+container, and gives the two editors on the *same* machine different opinions about the same word.
+`~/.vim/spell/en.utf-8.add` remains as the second entry, reached with `2zg`, for words that should
+not be in someone else's checkout.
+
+Two details make it work, and both are the sort that look like the feature is broken:
+
+- **Vim reads the compiled `.add.spl`, not the text**, and does not notice when the text is newer
+  -- so a word added by VS Code, or arriving in a `git pull`, stays underlined. The vimrc
+  recompiles on `VimEnter` when the timestamps say so, on `BufWritePost` of the list itself, and
+  on demand through `:SpellSync`. `:mkspell!` writes the file but does not make Vim re-read it;
+  reassigning `'spelllang'` is what forces the reload.
+- **codespell must not read the list.** It corrects on edit distance, and the one file in the
+  repository that is by construction a page of non-words is this one. It needs two `skip` entries
+  in `pyproject.toml`, because codespell `fnmatch`es each entry against the path as given and
+  pre-commit hands it `spell/en.utf-8.add` where a tree walk would produce `./spell`.
+
+`cspell.config.yaml` is YAML rather than `cspell.json` so that it can carry comments past the
+`check-json` hook. It gates nothing; codespell remains the checker that gates commits.
+
+The same image is used for VS Code through `.devcontainer/devcontainer.json`, so both editors
+resolve symbols identically -- same clangd, same flags, same `compile_commands.json`, mounted at
+the same `/workspace` the Vim workflow uses. `updateRemoteUserUID` is what keeps files in the
+mounted repository owned by the developer, and `overrideCommand` is required because the image's
+`ENTRYPOINT` is `bash` with no `CMD` and the container would otherwise exit at once.
 
 ### Debuggers and profilers
 
@@ -1015,7 +1078,7 @@ paragraph.
 
 `ALT-CPP` already has a `.clang-format`: Google-based, `IndentWidth: 4`, `ColumnLimit: 80`,
 `PointerAlignment: Left`. The indent width and column limit are a reasonable house style and are
-worth carrying over. Three changes:
+worth carrying over. Four changes:
 
 1. **Commit a minimal delta, not a `--dump-config` output.** The existing file is a full dump of
    every option for one clang-format version. New releases add options and occasionally change
@@ -1030,6 +1093,23 @@ worth carrying over. Three changes:
    the alignment *per file* from what is already there -- so the explicit setting is ignored and
    `int* p` and `int *p` can both persist in different files. The setting above is inert without
    this one.
+4. **`BreakBeforeBraces: Allman`, reversing Google's `Attach`.** Braces go on a line of their own,
+   after `if`, `for`, `while`, `switch`, `else` and `catch` as well as after a function, class or
+   namespace header. It stays a *named* style rather than `Custom` with a `BraceWrapping:` block:
+   the block is fifteen keys, most of them wrapping decisions this project has no opinion about,
+   and committing all fifteen would be the `--dump-config` mistake of point 1 in miniature.
+
+   `Stroustrup` is the near miss -- it breaks only before function definitions, `else` and
+   `catch`, leaving `if`, `for`, `while` and `switch` attached, which is not what the rule means
+   to anyone reading the result.
+
+   Google's `AllowShort*` options are orthogonal to this and are left alone, so a short function
+   body and a short lambda still fit on one line. That is deliberate: breaking them turns a
+   one-line accessor into four lines and makes every STL algorithm call four lines taller, for no
+   gain in the readability the brace rule is about. `AllowShortFunctionsOnASingleLine: Empty` and
+   `AllowShortLambdasOnASingleLine: Empty` make the rule literal if that judgement changes. A
+   braced `if` or `for` body is a separate option again, `AllowShortBlocksOnASingleLine`, which
+   Google already sets to `Never`.
 
 ### Keeping the hook and the image in agreement
 

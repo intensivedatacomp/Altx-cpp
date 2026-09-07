@@ -97,7 +97,36 @@ again is the normal flow.
 The style is a **minimal delta on Google**, not a `clang-format --dump-config` output — a full dump
 silently pins the project to one version's defaults and produces a large, meaningless diff on every
 upgrade. The genuine overrides are `IndentWidth: 4`, `ColumnLimit: 80`, `PointerAlignment: Right`
-with `DerivePointerAlignment: false`, `AccessModifierOffset: -4` and `Standard: c++20`.
+with `DerivePointerAlignment: false`, `AccessModifierOffset: -4`, `Standard: c++20` and
+`BreakBeforeBraces: Allman`.
+
+`Allman` is what puts every brace on a line of its own — after `if`, `for`, `while`, `switch`,
+`else`, `catch`, and after a function, class or namespace header:
+
+```cpp
+for (int i = 0; i < n; ++i)
+{
+    if (i % 2 == 0)
+    {
+        do_even(i);
+    }
+    else
+    {
+        do_odd(i);
+    }
+}
+```
+
+@note Two constructs stay on one line, because Google's `AllowShort*` options are orthogonal to
+`BreakBeforeBraces` and are deliberately left alone: a short function body
+(`int size() const { return n_; }`) and a short lambda (`[&](int x) { return x * 2; }`). That is
+what keeps one-line accessors and STL algorithm calls from costing four lines each. Set
+`AllowShortFunctionsOnASingleLine: Empty` and `AllowShortLambdasOnASingleLine: Empty` if the rule
+should be literal. Neither affects a braced `if` or `for` body — those are governed by
+`AllowShortBlocksOnASingleLine`, which Google already sets to `Never`.
+
+@note `Stroustrup` is the near miss to avoid: it breaks only before function definitions, `else`
+and `catch`, and leaves `if`, `for`, `while` and `switch` attached.
 
 @warning `DerivePointerAlignment` must stay `false`. Google leaves it `true`, which tells
 clang-format to infer pointer alignment *per file* from what is already there — so

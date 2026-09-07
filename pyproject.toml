@@ -64,8 +64,17 @@ convention = "numpy"
 # typos.
 
 # Directories that hold generated or third-party text. pre-commit passes the
-# changed files explicitly, so this only matters for a manual whole-tree run.
-skip = "./.git,./build,./docs/html,./.mypy_cache,./.ruff_cache,*.h5"
+# changed files explicitly, so a directory entry here only matters for a manual
+# whole-tree run.
+#
+# `spell/` is the exception, and needs *two* entries. It is the editors' shared
+# word list -- by construction a list of strings no dictionary contains -- so
+# it is the one file in the repository guaranteed to look like a page of typos
+# to a checker that corrects on edit distance. But codespell matches every
+# entry with `fnmatch` against the path as given: walking the tree it tests
+# `./spell`, while pre-commit hands it `spell/en.utf-8.add`, and neither
+# pattern matches the other's spelling of the same directory.
+skip = "./.git,./build,./docs/html,./.mypy_cache,./.ruff_cache,./spell,spell/*,*.h5"
 
 # --------------------------------------------------
 # MyPy -- type checking

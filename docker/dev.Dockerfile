@@ -8,7 +8,37 @@ ENV DEBIAN_FRONTEND=noninteractive
 # rebuild of this one does not imply a rebuild of its parent. Without the line
 # here, a dev image rebuilt six months after base-cpu last changed would ship
 # base-cpu's six-month-old system packages.
-RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+#
+# That line alone is not enough, and the gap is not obvious. `apt-get upgrade`
+# is only ever as fresh as the layer it lives in, and that layer's cache key is
+# its own instruction text plus the parent image -- neither of which changes
+# when a security update lands in the Ubuntu archive. So buildx reuses the
+# layer, and the image keeps whatever package set it had on the day the layer
+# was *first* built, however many times it is rebuilt afterwards. Because this
+# file's later instructions are what usually change (docker/vim/vimrc is copied
+# in near the bottom), the apt layers are almost always a cache hit, and the
+# upgrade above is almost always a no-op.
+#
+# That is not hypothetical: a dev-cpu built on 2026-09-07 still shipped
+# linux-libc-dev 6.8.0-137.137 from a layer built on 2026-08-16, and failed the
+# Trivy gate on two kernel CVEs the archive had by then fixed twice over.
+#
+# APT_SNAPSHOT closes it. The date is part of the instruction text below, so
+# bumping it invalidates this layer and -- Docker invalidating everything after
+# a changed layer -- the second apt block too, which is why only this one needs
+# the argument. And since scripts/ci/images.py hashes this file byte for byte,
+# the bump also changes the image's content hash, so CI rebuilds rather than
+# reusing the published image and re-scanning it.
+#
+# **Bump it when the Trivy gate reports a fixed vulnerability in a system
+# package.** That is the feedback loop this argument exists to close: the gate
+# says the archive is ahead of the image, and this is the one-line answer.
+# Passing `--build-arg APT_SNAPSHOT=...` forces a refresh without editing the
+# file, but then the build no longer matches its content hash -- the default
+# here is the source of truth.
+ARG APT_SNAPSHOT=2026-09-07
+RUN echo "apt snapshot ${APT_SNAPSHOT}" && \
+    apt-get update && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \

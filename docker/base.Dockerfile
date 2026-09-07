@@ -19,7 +19,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 # already silenced for the same reason (Ubuntu keeps one version per package),
 # and the real guarantee is that scripts/ci/images.py hashes this file byte for
 # byte, so the image identity tracks its contents.
-RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+#
+# APT_SNAPSHOT is what makes that upgrade mean anything. Bump the date to force
+# a package refresh; see docker/dev.Dockerfile, where the same argument is
+# spelled out at length and where the failure that motivated it happened.
+ARG APT_SNAPSHOT=2026-09-07
+RUN echo "apt snapshot ${APT_SNAPSHOT}" && \
+    apt-get update && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends \
         libopenblas0-openmp \
         liblapacke \

@@ -1,0 +1,43 @@
+# Project word list -- one word per line, `#` starts a comment.
+#
+# Read by two spell checkers, which is the whole point of it existing:
+#
+#   * Vim, as the first entry of 'spellfile' (docker/vim/vimrc), so `zg` on a
+#     word appends it here. Vim reads the compiled `en.utf-8.add.spl` beside
+#     this file, which is gitignored and rebuilt automatically when this file
+#     is newer -- `:SpellSync` forces it.
+#   * cspell in VS Code, through the dictionary declared in
+#     `cspell.config.yaml`, whose "Add word to dictionary" quick fix appends
+#     here too.
+#
+# So a word added in either editor is known to both, and shows up in the diff
+# rather than in someone's untracked settings. Keep it sorted; `codespell` is
+# a separate list in pyproject.toml and does not read this one.
+
+Allman
+BLAS
+Creset
+Stroustrup
+altx
+buildx
+codespell
+fopenmp
+graphviz
+halmosb
+intensivedatacomp
+lgac
+libblas
+libgomp
+libhdf
+liblapacke
+libomp
+libopenblas
+openblas
+oupadd
+phreads
+pyproject
+readlink
+rocm
+spellfile
+userdel
+vimrc

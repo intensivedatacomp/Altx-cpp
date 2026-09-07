@@ -43,3 +43,30 @@ AccessModifierOffset: -4
 # default is Auto, which guesses per file and can misparse a construct it has
 # not seen an example of yet.
 Standard: c++20
+
+# Braces on their own line, reversing Google's `Attach`. This is the one place
+# where a named style says what a `BraceWrapping:` block would take fifteen keys
+# to say, and it stays a named style deliberately -- the fifteen keys would be
+# the `--dump-config` mistake in miniature, freezing defaults for the wrapping
+# options this project has no opinion about.
+#
+# `Allman` rather than `Stroustrup`: Stroustrup breaks only before function
+# definitions, `else` and `catch`, and leaves `if`, `for`, `while` and `switch`
+# attached -- which is not what "braces on a new line" means to anyone reading
+# the result.
+#
+# Two things Allman does *not* break, because Google's `AllowShort*` options are
+# orthogonal to it and are left alone:
+#
+#   * short function bodies -- `int size() const { return n_; }` stays on one
+#     line (`AllowShortFunctionsOnASingleLine: All`), which is what keeps
+#     one-line accessors in a header from costing four lines each;
+#   * short lambdas -- `[&](int x) { return x * 2; }` likewise
+#     (`AllowShortLambdasOnASingleLine: All`), which is what keeps an STL
+#     algorithm call readable.
+#
+# Set `AllowShortFunctionsOnASingleLine: Empty` and
+# `AllowShortLambdasOnASingleLine: Empty` if the rule should be literal instead.
+# Note that neither affects a braced `if`/`for` body: those are governed by
+# `AllowShortBlocksOnASingleLine`, which Google already sets to `Never`.
+BreakBeforeBraces: Allman

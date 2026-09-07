@@ -1,7 +1,14 @@
 # vim
 .swp
 
-# VS Code
+# Vim's compiled form of spell/en.utf-8.add. Generated from the committed word
+# list, binary, and regenerated whenever that list is newer -- so committing it
+# would only produce merge conflicts in a file nobody can read.
+spell/*.spl
+
+# VS Code. The shared settings live in .devcontainer/devcontainer.json and
+# cspell.config.yaml, both of which are committed; this is the per-developer
+# remainder.
 .vscode
 
 # Claude

@@ -41,7 +41,8 @@ set autoindent         " Indenting code
 set scrolloff=5        " Keep 5 lines visible above/below cursor
 set wildmenu           " Tab completion in command mode
 syntax on              " Set up syntax highlighting
-set spell              " Set up spell check
+set spell              " Set up spell check (word lists: see below)
+set spelllang=en
 
 " Enable 24-bit true color in terminals that support it
 if exists('+termguicolors')
@@ -51,8 +52,127 @@ if exists('+termguicolors')
 endif
 
 " ---------------------------------
+" Spell checking
+" ---------------------------------
+"
+" `zg` writes to a word list, and there are two, in priority order:
+"
+"   1. `spell/en.utf-8.add` at the repository root -- committed, and the same
+"      file `cspell.config.yaml` hands to the VS Code spell checker, so a word
+"      added in either editor is known to both and travels in the diff;
+"   2. `~/.vim/spell/en.utf-8.add` -- personal and container-local, for words
+"      that have no business in someone else's checkout.
+"
+" `zg` adds to the first and `2zg` to the second; `zug` and `2zug` undo. `zw`
+" (mark as *wrong*) also writes to the first file, as `word/!`, which cspell
+" does not understand -- it spells a forbidden word `!word` -- so prefer `2zw`
+" and keep the shared list additive.
+"
+" Vim insists the file be named `{lang}.{encoding}.add`, which is why the
+" shared list is not called `dictionary.txt`.
+
+let s:user_spell_dir = expand('~/.vim/spell')
+if !isdirectory(s:user_spell_dir)
+    call mkdir(s:user_spell_dir, 'p')
+endif
+
+" Searched for upwards from the working directory rather than hardcoded to
+" /workspace, so the shared list is still found when the repository is mounted
+" somewhere else or Vim is started from a subdirectory.
+let s:project_spell_dir = finddir('spell', getcwd() . ';')
+let s:project_spellfile = empty(s:project_spell_dir)
+    \ ? ''
+    \ : simplify(fnamemodify(s:project_spell_dir, ':p') . '/en.utf-8.add')
+
+let &spellfile = join(filter(
+    \ [s:project_spellfile, s:user_spell_dir . '/en.utf-8.add'],
+    \ '!empty(v:val)'), ',')
+
+" Vim reads the compiled `.add.spl`, never the `.add` text, and -- unlike the
+" `.spl` files it ships -- it does not notice when the text is newer. So a word
+" added by VS Code, or arriving in a `git pull`, stays underlined until the
+" list is recompiled. `:mkspell!` does that but does not make Vim re-read the
+" result, hence the reassignment of 'spelllang', which is what triggers a
+" reload.
+"
+" `a:force` exists because file times have one-second resolution: a word added
+" to the list within the same second as the last rebuild leaves the two files
+" looking equally old. That is unlikely to matter for the timer-free VimEnter
+" check, and certain to matter for the two paths that follow an edit that just
+" happened -- so those rebuild unconditionally.
+function! s:SyncSpellFile(force) abort
+    if empty(s:project_spellfile) || !filereadable(s:project_spellfile)
+        return
+    endif
+    if !a:force
+        \ && getftime(s:project_spellfile) <= getftime(s:project_spellfile . '.spl')
+        return
+    endif
+    try
+        execute 'silent mkspell! ' . fnameescape(s:project_spellfile)
+        let &spelllang = &spelllang
+    catch
+        echohl WarningMsg
+        echomsg 'Could not compile ' . s:project_spellfile . ': ' . v:exception
+        echohl None
+    endtry
+endfunction
+
+command! SpellSync call s:SyncSpellFile(1)
+
+if !empty(s:project_spellfile)
+    augroup altx_spellfile
+        autocmd!
+        autocmd VimEnter * call s:SyncSpellFile(0)
+        execute 'autocmd BufWritePost' s:project_spellfile 'call s:SyncSpellFile(1)'
+    augroup END
+endif
+
+" ---------------------------------
 " Setting up autocomplete
 " ---------------------------------
+
+" `menuone`  show the menu even for a single match, so accepting is always the
+"            same gesture rather than sometimes being unnecessary;
+" `noinsert` do not put a candidate's text in the buffer until one is chosen;
+" `noselect` do not preselect the first candidate, so <Tab> is never ambiguous
+"            with "I am still typing";
+" `popup`    show clangd's `--completion-style=detailed` documentation in a
+"            floating window rather than the `preview` split, which otherwise
+"            opens and closes a window on every keystroke.
+set completeopt=menuone,noinsert,noselect,popup
+set completepopup=height:12,width:70,border:off,align:menu
+
+" Vim writes "match 1 of 8" to the command line for every keystroke of an
+" as-you-type completion, which overwrites anything else there.
+set shortmess+=c
+
+" Accept the highlighted candidate with <Tab> or <Right>.
+"
+" `complete_info(['selected']).selected` is -1 exactly while the popup is open
+" with nothing highlighted, which is the state `noselect` opens it in. There
+" both keys take the *first* match, so accepting the obvious candidate costs
+" one keystroke instead of two. <C-n>/<C-p> and <Down>/<Up> still move through
+" the list, <C-y> still accepts and <C-e> still dismisses.
+"
+" The fallback is chosen by name inside the function rather than passed as
+" "\<Tab>": `:inoremap` translates `<...>` key notation inside its {rhs}
+" *before* the expression is ever evaluated, so a literal tab would end up
+" spliced into the string expression itself.
+function! s:AcceptCompletion(fallback) abort
+    if pumvisible()
+        return complete_info(['selected']).selected == -1
+            \ ? "\<C-n>\<C-y>"
+            \ : "\<C-y>"
+    endif
+    return a:fallback ==# 'tab' ? "\<Tab>" : "\<Right>"
+endfunction
+
+" `inoremap`, not `imap`: the returned keys are fed back as typed input, so
+" with a remappable mapping the "\<Tab>" fallback would match this same
+" mapping again.
+inoremap <expr> <Tab>   <SID>AcceptCompletion('tab')
+inoremap <expr> <Right> <SID>AcceptCompletion('right')
 
 if executable('clangd')
   augroup lsp_clangd
