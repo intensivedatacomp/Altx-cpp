@@ -774,8 +774,46 @@ The one thing that needs deliberate handling: **clangd does not understand `hipc
 `--query-driver`. Without this, the GPU sources are the only part of the codebase with no editor
 support, which is exactly where it would be missed most.
 
-The same image is used for VS Code through a `.devcontainer/devcontainer.json`, so both editors
-resolve symbols identically.
+**Accepting a completion is bound to `<Tab>` and `<Right>`**, alongside Vim's own `<C-y>`.
+`completeopt` is `menuone,noinsert,noselect,popup`, which `asyncomplete` needs to behave: without
+`noselect` Vim highlights the first candidate immediately, and a `<Tab>` that sometimes indents
+and sometimes accepts a candidate the user never looked at is worse than no binding. The cost of
+`noselect` is that accepting the obvious match would take two keystrokes, so both keys take the
+first match when nothing is highlighted yet and accept the highlighted one otherwise. They are
+`inoremap <expr>` mappings testing `pumvisible()`, not anything `asyncomplete`-specific, so they
+also cover Vim's built-in completions -- and `inoremap` rather than `imap` matters, since the keys
+an `<expr>` mapping returns are fed back as typed input and would otherwise match the mapping
+again.
+
+**One word list is shared between Vim and VS Code**: `spell/en.utf-8.add`, committed. It is the
+first entry of Vim's `'spellfile'`, so `zg` appends to it, and it is declared in
+`cspell.config.yaml` with `addWords: true`, so VS Code's "Add word to dictionary" appends to it
+too. The alternative -- Vim's `~/.vim/spell` inside a `--rm` container and VS Code's `cSpell.words`
+in a gitignored `.vscode/settings.json` -- gives every developer a private list that dies with the
+container, and gives the two editors on the *same* machine different opinions about the same word.
+`~/.vim/spell/en.utf-8.add` remains as the second entry, reached with `2zg`, for words that should
+not be in someone else's checkout.
+
+Two details make it work, and both are the sort that look like the feature is broken:
+
+- **Vim reads the compiled `.add.spl`, not the text**, and does not notice when the text is newer
+  -- so a word added by VS Code, or arriving in a `git pull`, stays underlined. The vimrc
+  recompiles on `VimEnter` when the timestamps say so, on `BufWritePost` of the list itself, and
+  on demand through `:SpellSync`. `:mkspell!` writes the file but does not make Vim re-read it;
+  reassigning `'spelllang'` is what forces the reload.
+- **codespell must not read the list.** It corrects on edit distance, and the one file in the
+  repository that is by construction a page of non-words is this one. It needs two `skip` entries
+  in `pyproject.toml`, because codespell `fnmatch`es each entry against the path as given and
+  pre-commit hands it `spell/en.utf-8.add` where a tree walk would produce `./spell`.
+
+`cspell.config.yaml` is YAML rather than `cspell.json` so that it can carry comments past the
+`check-json` hook. It gates nothing; codespell remains the checker that gates commits.
+
+The same image is used for VS Code through `.devcontainer/devcontainer.json`, so both editors
+resolve symbols identically -- same clangd, same flags, same `compile_commands.json`, mounted at
+the same `/workspace` the Vim workflow uses. `updateRemoteUserUID` is what keeps files in the
+mounted repository owned by the developer, and `overrideCommand` is required because the image's
+`ENTRYPOINT` is `bash` with no `CMD` and the container would otherwise exit at once.
 
 ### Debuggers and profilers
 

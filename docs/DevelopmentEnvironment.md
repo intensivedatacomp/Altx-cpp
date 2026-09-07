@@ -249,8 +249,31 @@ clangd writes its index to `.cache/clangd` in the workspace; `.gitignore` alread
 @subsection devenv_vim_lsp Autocomplete and code navigation
 
 `vim-lsp` provides the LSP client and `asyncomplete.vim` the as-you-type popup. Completion appears
-while typing; `<C-n>` and `<C-p>` move through the candidates, `<C-y>` accepts one and `<C-e>`
-dismisses the popup.
+while typing:
+
+| Key                      | What it does                                                     |
+| ------------------------ | ---------------------------------------------------------------- |
+| `<Tab>`, `<Right>`       | **Accept.** With nothing highlighted yet, takes the first match   |
+| `<C-n>`, `<Down>`        | Next candidate                                                    |
+| `<C-p>`, `<Up>`          | Previous candidate                                                |
+| `<C-y>`                  | Accept the highlighted candidate — Vim's own binding, still there |
+| `<C-e>`                  | Dismiss the popup and keep what you typed                         |
+| `<CR>`                   | Dismiss the popup and insert a newline                            |
+
+`completeopt` is `menuone,noinsert,noselect,popup`, which is what makes that table read the way it
+does. `noselect` means the popup opens with *nothing* highlighted, so `<Tab>` is never ambiguous
+with "I am still typing"; `noinsert` keeps a candidate out of the buffer until you choose one; and
+`popup` puts clangd's `--completion-style=detailed` documentation in a floating window instead of
+the `preview` split, which otherwise opens and closes a window on every keystroke.
+
+Because nothing is highlighted at first, accepting the obvious candidate would cost two keystrokes
+— one to highlight, one to accept. `<Tab>` and `<Right>` collapse that: with no selection they take
+the first match outright, and with a selection they accept that. When no popup is open both keys do
+what they always did, so `<Tab>` still indents.
+
+@note `<Tab>` and `<Right>` are `inoremap <expr>` mappings on `s:AcceptCompletion()` in
+`docker/vim/vimrc`. They test `pumvisible()` rather than anything `asyncomplete`-specific, so they
+work for Vim's built-in completions (`<C-x><C-f>` for filenames, say) as well as for clangd's.
 
 The plugins define around forty commands. These are the ones worth knowing:
 
@@ -274,9 +297,36 @@ The plugins define around forty commands. These are the ones worth knowing:
 often, adding mappings such as `nnoremap gd :LspDefinition<CR>` and `nnoremap K :LspHover<CR>` to
 `docker/vim/vimrc` is worthwhile.
 
-@note `completeopt` is at Vim's default `menu,preview`. `asyncomplete` behaves better with
-`set completeopt=menuone,noinsert,noselect`, which shows the popup even when there is a single
-match and stops Vim inserting a candidate before you have chosen one.
+@subsection devenv_vim_spell Spell checking and the shared word list
+
+Spell checking is on for every buffer (`set spell`, `spelllang=en`). `]s` and `[s` move between
+misspellings and `z=` offers corrections.
+
+The part worth knowing is where a *new* word goes. `'spellfile'` names two files, in this order:
+
+| Key    | File                              | Shared?                                  |
+| ------ | --------------------------------- | ---------------------------------------- |
+| `zg`   | `spell/en.utf-8.add` in the repo  | Yes — committed, and read by VS Code too |
+| `2zg`  | `~/.vim/spell/en.utf-8.add`       | No — container-local, gone with the container |
+
+`zg` on the word under the cursor adds it to the project list; `zug` takes it back out. `2zg` and
+`2zug` do the same to the personal one, for words that have no business in someone else's checkout.
+
+`spell/en.utf-8.add` is the whole point of the arrangement: `cspell.config.yaml` declares it as a
+dictionary with `addWords: true`, so VS Code's **Add word to dictionary** appends to the same file.
+A word added in either editor is known to both, and turns up in the diff rather than in someone's
+untracked settings. The format is one word per line with `#` for comments — which both checkers
+read the same way. The name is Vim's requirement (`{lang}.{encoding}.add`), which is why it is not
+called `dictionary.txt`.
+
+@note `zw` — mark a word as *wrong* — writes `word/!`, which cspell does not understand; it spells
+a forbidden word `!word`. Prefer `2zw` and keep the shared list additive.
+
+Vim reads the *compiled* `spell/en.utf-8.add.spl`, never the text, and does not notice on its own
+when the text is newer. The vimrc therefore recompiles it on startup when it is out of date, and
+again whenever the list is written from inside Vim. `:SpellSync` forces a rebuild, which is the
+command to reach for after VS Code adds a word to a file Vim already has open. The `.spl` is
+generated and binary, and `.gitignore` covers it.
 
 @subsection devenv_vim_fugitive Git
 
@@ -310,6 +360,36 @@ Four-space indentation with `expandtab`; incremental, highlighted search that is
 unless the pattern contains an uppercase letter (`:noh` clears the highlight); `wildmenu` for
 command-line completion; and true colour where the terminal supports it.
 
+@section devenv_vscode VS Code
+
+VS Code uses the same container, so that both editors resolve symbols through the same clangd,
+against the same `compile_commands.json`, with the same compiler and libraries underneath.
+
+Install the **Dev Containers** extension (`ms-vscode-remote.remote-containers`), open the
+repository, and accept **Reopen in Container** — or run *Dev Containers: Reopen in Container* from
+the command palette. The first open pulls the image and installs the extensions listed below into
+it; later ones are immediate.
+
+`.devcontainer/devcontainer.json` is the whole configuration. What it says, and why:
+
+| Key | Why it is there |
+| --- | --- |
+| `image` | `ghcr.io/…/dev-cpu:edge`, the published image — no local build needed. See below to use one. |
+| `workspaceFolder`, `workspaceMount` | `/workspace`, the same path the Vim workflow mounts at, so `~/.config/clangd/config.yaml` and every documented command mean the same thing in both. |
+| `remoteUser`, `updateRemoteUserUID` | Run as `non_root` and rewrite its uid to match yours, so files created in the mounted repository are not owned by someone else. This is the automatic version of the `--build-arg UID=…` rebuild described above. |
+| `overrideCommand` | The image's `ENTRYPOINT` is `bash` with no `CMD`, so the container would exit the moment it started. |
+| `clangd.arguments` | The same five flags as `docker/vim/vimrc`, `--query-driver` included. Divergence here shows up as one editor being right about `libstdc++` and the other not. |
+| `C_Cpp.intelliSenseEngine: disabled` | If the Microsoft C/C++ extension is installed as well, its own parser competes with clangd and reports a second, different set of diagnostics. clangd is the one this project configures. |
+
+@note `.vscode/` stays in `.gitignore`. The settings that must be the same for everyone live in
+`.devcontainer/devcontainer.json` and `cspell.config.yaml`, both committed; `.vscode/` is the
+per-developer remainder. In particular, do **not** keep words in `cSpell.words` there — they are
+invisible to Vim and to everyone else. See @ref devenv_vim_spell.
+
+To work against a locally built image instead of the published one, change `image` to
+`altx-cpp/dev-cpu:local` (the default name from `scripts/build_docker_images_locally.sh`) — but do
+not commit that, since it does not exist on anyone else's machine.
+
 @section devenv_trouble Troubleshooting
 
 | Symptom                                              | Cause                                                        |
@@ -320,6 +400,9 @@ command-line completion; and true colour where the terminal supports it.
 | No completion in `:term`                              | `$SHELL` not exported, so the terminal is running dash        |
 | Files in the repository owned by the wrong user       | Image built with a `UID`/`GID` that is not yours              |
 | A CPU build pulling gigabytes of ROCm                 | `docker-buildx` not installed; legacy builder resolves all stages |
+| A word added in VS Code still underlined in Vim       | The `.add.spl` is stale in an already-open session — `:SpellSync` |
+| `zg` reports it cannot write the word list            | Vim started outside the repository, so `spell/` was not found upwards |
+| VS Code's "Add to dictionary" offers only user settings | The cspell extension is not seeing `cspell.config.yaml` — check the folder it opened |
 
 `:LspStatus` answers most editor questions directly, and `clangd --check=<file>` outside Vim shows
 exactly which flags clangd used and which includes it failed to resolve.

@@ -1,0 +1,50 @@
+# Spell checking for VS Code (the `streetsidesoftware.code-spell-checker`
+# extension, installed by .devcontainer/devcontainer.json).
+#
+# YAML rather than `cspell.json` for one reason: the `check-json` pre-commit
+# hook parses strict JSON, so a commented `cspell.json` would fail it. cspell
+# searches for this name too.
+#
+# The point of the file is the dictionary below. Without it, VS Code's "Add
+# word to dictionary" writes into `.vscode/settings.json`, which .gitignore
+# excludes -- so every developer accumulates a private list, and Vim in the
+# same container knows none of it.
+#
+# codespell (pyproject.toml, [tool.codespell]) is a *different* checker with a
+# different job: it looks for known misspellings of real words, not for words
+# missing from a dictionary, and it is the one that gates commits. This file
+# gates nothing; it only decides what is underlined in the editor.
+
+version: "0.2"
+
+language: en
+
+dictionaryDefinitions:
+  # The same file Vim's 'spellfile' points at, so `zg` in Vim and "Add word to
+  # dictionary" in VS Code append to one list. `addWords: true` is what makes
+  # the extension offer to write here rather than into user settings.
+  #
+  # The path is relative to this file. Vim requires the `{lang}.{encoding}.add`
+  # name; cspell reads it as a plain word list, one word per line, `#` for
+  # comments -- a format the two happen to share. `type: S` says so explicitly,
+  # because cspell otherwise infers the format from the extension, and `.add`
+  # is not one it has heard of.
+  - name: altx-project
+    path: ./spell/en.utf-8.add
+    description: Project words, shared with Vim's spellfile.
+    type: S
+    addWords: true
+
+dictionaries:
+  - altx-project
+
+# `.gitignore` already lists the build directories, the tool caches and the
+# virtualenv, so there is no reason to repeat them here.
+useGitignore: true
+
+ignorePaths:
+  # Vim's compiled form of the word list: binary, and gitignored, so
+  # `useGitignore` covers it -- but it is listed anyway because a checker
+  # reporting on its own dictionary would be a confusing first impression.
+  - "spell/*.spl"
+  - ".git/**"

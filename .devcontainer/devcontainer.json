@@ -1,0 +1,47 @@
+{
+    "name": "altx-cpp dev-cpu",
+    "image": "ghcr.io/intensivedatacomp/altx-cpp/dev-cpu:edge",
+    "workspaceFolder": "/workspace",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+    "remoteUser": "non_root",
+    "updateRemoteUserUID": true,
+    "overrideCommand": true,
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "llvm-vs-code-extensions.vscode-clangd",
+                "streetsidesoftware.code-spell-checker",
+                "ms-vscode.cmake-tools",
+                "twxs.cmake",
+                "ms-vscode.makefile-tools",
+                "xaver.clang-format"
+            ],
+            "settings": {
+                "clangd.path": "/usr/bin/clangd",
+                "clangd.arguments": [
+                    "--background-index",
+                    "--clang-tidy",
+                    "--completion-style=detailed",
+                    "--header-insertion=iwyu",
+                    "--query-driver=/usr/bin/g++*,/usr/bin/gcc*,/opt/rocm/bin/hipcc"
+                ],
+                "C_Cpp.intelliSenseEngine": "disabled",
+                "clang-format.executable": "/usr/bin/clang-format",
+                "cSpell.enabled": true,
+                "editor.rulers": [
+                    80
+                ],
+                "editor.formatOnSave": true,
+                "files.insertFinalNewline": true,
+                "files.trimTrailingWhitespace": true,
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "[cpp]": {
+                    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+                },
+                "[c]": {
+                    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+                }
+            }
+        }
+    }
+}
