@@ -1053,7 +1053,7 @@ paragraph.
 
 `ALT-CPP` already has a `.clang-format`: Google-based, `IndentWidth: 4`, `ColumnLimit: 80`,
 `PointerAlignment: Left`. The indent width and column limit are a reasonable house style and are
-worth carrying over. Three changes:
+worth carrying over. Four changes:
 
 1. **Commit a minimal delta, not a `--dump-config` output.** The existing file is a full dump of
    every option for one clang-format version. New releases add options and occasionally change
@@ -1068,6 +1068,23 @@ worth carrying over. Three changes:
    the alignment *per file* from what is already there -- so the explicit setting is ignored and
    `int* p` and `int *p` can both persist in different files. The setting above is inert without
    this one.
+4. **`BreakBeforeBraces: Allman`, reversing Google's `Attach`.** Braces go on a line of their own,
+   after `if`, `for`, `while`, `switch`, `else` and `catch` as well as after a function, class or
+   namespace header. It stays a *named* style rather than `Custom` with a `BraceWrapping:` block:
+   the block is fifteen keys, most of them wrapping decisions this project has no opinion about,
+   and committing all fifteen would be the `--dump-config` mistake of point 1 in miniature.
+
+   `Stroustrup` is the near miss -- it breaks only before function definitions, `else` and
+   `catch`, leaving `if`, `for`, `while` and `switch` attached, which is not what the rule means
+   to anyone reading the result.
+
+   Google's `AllowShort*` options are orthogonal to this and are left alone, so a short function
+   body and a short lambda still fit on one line. That is deliberate: breaking them turns a
+   one-line accessor into four lines and makes every STL algorithm call four lines taller, for no
+   gain in the readability the brace rule is about. `AllowShortFunctionsOnASingleLine: Empty` and
+   `AllowShortLambdasOnASingleLine: Empty` make the rule literal if that judgement changes. A
+   braced `if` or `for` body is a separate option again, `AllowShortBlocksOnASingleLine`, which
+   Google already sets to `Never`.
 
 ### Keeping the hook and the image in agreement
 

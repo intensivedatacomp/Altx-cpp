@@ -14,13 +14,17 @@
 # rather than in someone's untracked settings. Keep it sorted; `codespell` is
 # a separate list in pyproject.toml and does not read this one.
 
+Allman
 BLAS
-buildx
 Creset
+Stroustrup
 altx
+buildx
+codespell
 fopenmp
 graphviz
 halmosb
+intensivedatacomp
 lgac
 libblas
 libgomp
@@ -31,11 +35,9 @@ libopenblas
 openblas
 oupadd
 phreads
+pyproject
 readlink
 rocm
+spellfile
 userdel
 vimrc
-intensivedatacomp
-pyproject
-codespell
-spellfile
