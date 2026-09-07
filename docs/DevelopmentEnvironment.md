@@ -90,6 +90,28 @@ severity, including LOW and UNKNOWN, so the tab stays the unfiltered view. Only 
 step applies the HIGH/CRITICAL filter. An alert there is therefore not necessarily something that
 will fail a build — check its severity before treating it as one.
 
+@subsection devenv_published_apt Refreshing system packages
+
+When the gate reports a **fixed** vulnerability in an apt package, the fix is one line: bump
+`ARG APT_SNAPSHOT` to today's date in `docker/dev.Dockerfile`, and in `docker/base.Dockerfile` too
+if the package is in the base image.
+
+Both Dockerfiles run `apt-get upgrade`, but an upgrade is only ever as fresh as the layer it lives
+in — and that layer's cache key is its own instruction text plus the parent image, neither of which
+changes when a security update lands in the Ubuntu archive. buildx therefore reuses the layer, and
+the image keeps the package set it had on the day that layer was *first* built. Since the
+instructions that usually change are further down (`docker/vim/vimrc` is copied in near the bottom
+of `dev.Dockerfile`), the apt layers are almost always a cache hit and the upgrade almost always a
+no-op.
+
+`APT_SNAPSHOT` is part of the instruction text, so bumping it invalidates that layer and everything
+after it — and because `scripts/ci/images.py` hashes the Dockerfile byte for byte, it also changes
+the content hash, so CI rebuilds instead of re-scanning the published image.
+
+@note This is why a failing Trivy gate is usually not something to suppress. `.trivyignore` is for
+a fix that is *not ours to make*; a fixed CVE in an apt package is ours, and `APT_SNAPSHOT` is how
+we take it.
+
 The findings a development image accumulates are not usually the compiler and debugger it ships;
 they are what the *build* left behind. `dev-cpu` bakes `~/.cache/pre-commit` in, and
 `pre-commit install-hooks` leaves a Go toolchain, four unused code-generator binaries from the
@@ -400,6 +422,7 @@ not commit that, since it does not exist on anyone else's machine.
 | No completion in `:term`                              | `$SHELL` not exported, so the terminal is running dash        |
 | Files in the repository owned by the wrong user       | Image built with a `UID`/`GID` that is not yours              |
 | A CPU build pulling gigabytes of ROCm                 | `docker-buildx` not installed; legacy builder resolves all stages |
+| Trivy reports a *fixed* CVE in an apt package         | The apt layer was a cache hit — bump `APT_SNAPSHOT`, see @ref devenv_published_apt |
 | A word added in VS Code still underlined in Vim       | The `.add.spl` is stale in an already-open session — `:SpellSync` |
 | `zg` reports it cannot write the word list            | Vim started outside the repository, so `spell/` was not found upwards |
 | VS Code's "Add to dictionary" offers only user settings | The cspell extension is not seeing `cspell.config.yaml` — check the folder it opened |

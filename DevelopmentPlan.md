@@ -438,7 +438,32 @@ each result -- catching "works in CI only" before it becomes a debugging session
 
 Base images are pinned by **digest**, but individual apt package versions are not: Ubuntu drops
 old versions from the archive, so pinning them turns every base refresh into a maintenance task
-for very little additional reproducibility.
+for very little additional reproducibility. Both Dockerfiles therefore run `apt-get upgrade`, so
+that a digest-pinned base does not freeze months of unapplied security fixes into the image.
+
+**That upgrade needs a cache buster to mean anything**, which is not obvious and cost a red CI run
+to discover. An `apt-get upgrade` is only ever as fresh as the layer it lives in, and that layer's
+cache key is its own instruction text plus the parent image -- neither of which changes when a
+security update lands in the archive. buildx reuses the layer, and the image keeps the package set
+it had on the day that layer was *first* built, however often it is rebuilt afterwards. The
+instructions that usually change are further down the file (`docker/vim/vimrc` is copied in near
+the bottom of `dev.Dockerfile`), so the apt layers are almost always a cache hit and the upgrade
+almost always a no-op. A dev-cpu rebuilt on 2026-09-07 shipped `linux-libc-dev 6.8.0-137.137` from
+a layer built on 2026-08-16 and failed the Trivy gate on two kernel CVEs the archive had by then
+fixed twice over.
+
+`ARG APT_SNAPSHOT=<date>`, referenced in the apt `RUN`, closes it. Bumping the date invalidates
+that layer and everything after it, and -- because `scripts/ci/images.py` hashes the Dockerfile
+byte for byte -- also changes the image's content hash, so CI rebuilds rather than re-scanning the
+published image. It lives in the Dockerfile rather than in `images.yaml`'s `build_args` for the
+reason `images.yaml` already gives for the apt package list itself: the Dockerfile is hashed byte
+for byte, so a literal there is already covered, and putting it in `build_args` would need the same
+value kept in sync in two places and taught to `scripts/build_docker_images_locally.sh`, which
+passes its build arguments by hand.
+
+This gives the Trivy gate a feedback loop rather than a suppression list: a gate failure on a fixed
+CVE in an apt package means the archive is ahead of the image, and the bump is the answer.
+`.trivyignore` stays for fixes that are not ours to make.
 
 ### Presets map one-to-one onto images
 
