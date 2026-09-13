@@ -7,6 +7,20 @@ The Python scripts declare their own requirements inline, in a PEP 723 `# /// sc
 repository's linter-only `pyproject.toml` as a project, which is what otherwise causes the warning
 `No requires-python value found in the workspace`.
 
+### `scripts/check_omp_braces.py` — braces after OpenMP directives
+
+```bash
+scripts/check_omp_braces.py src/core/*.cpp     # path:line for each unbraced block directive
+```
+
+This is the `omp-braces` pre-commit hook, which runs on the changed C, C++ and CUDA files. It
+complements `InsertBraces: true` in `.clang-format`. That option braces every `if`, `for` and
+`while` body but cannot see an OpenMP structured block. The script requires a `{` block after
+directives such as `parallel`, `critical`, `single` and `task`. It skips loop directives like
+`parallel for`, `atomic`, and directives that take no statement. It reports and exits 1 but never
+edits. To exempt one directive, put `// omp-braces: ignore` and a reason on its line. It needs
+only Python 3.12 or newer.
+
 ### `scripts/count_lines.py` — the size of the code base
 
 ```bash

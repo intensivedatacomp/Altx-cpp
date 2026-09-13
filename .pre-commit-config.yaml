@@ -59,6 +59,25 @@ repos:
         # and will need adding here explicitly.
         types_or: [c, c++, cuda]
 
+  # --- Braces after OpenMP directives ---
+  # The other half of `InsertBraces: true` in .clang-format, which braces every
+  # if/for/while body but cannot see a `#pragma omp parallel` or
+  # `#pragma omp critical` over a single statement. Checks, does not fix: where
+  # the closing brace belongs is a statement boundary, which a line-based
+  # script should not be the one to guess. Listed after clang-format so it
+  # reads the formatted file.
+  #
+  # `language: system`, so there is no hook environment for dev.Dockerfile to
+  # bake or prune: the script is standard library only and runs on whatever
+  # `python3` is first on PATH -- 3.14 in dev-cpu, 3.12 on the CI runner.
+  - repo: local
+    hooks:
+      - id: omp-braces
+        name: braces after OpenMP directives
+        entry: python3 scripts/check_omp_braces.py
+        language: system
+        types_or: [c, c++, cuda]
+
   # --- gersemi (CMake formatting) ---
   # No CMakeLists.txt exists yet -- stage 2 writes the first one. Configured now
   # so that one arrives formatted instead of being reformatted later in a commit
