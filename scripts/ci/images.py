@@ -82,7 +82,16 @@ except ImportError:  # pragma: no cover - environment problem, not a code path
 # Bump when the hashing rule changes in a way that must invalidate every
 # existing hash- tag. Without it, a change to this file silently keeps every
 # image at its old hash and nothing rebuilds.
-HASH_SCHEMA = "altx-image-hash-v1"
+#
+# Also bumped when the build action starts writing something into every
+# manifest that the existing images lack: an image whose hash exists is retagged,
+# never rebuilt, so it would otherwise never receive it. v2 was that, for the
+# description annotation in .github/actions/build-image/action.yml.
+HASH_SCHEMA = "altx-image-hash-v2"
+
+# GHCR's limit on org.opencontainers.image.description. A longer one is not
+# rejected at push time; it is simply not shown.
+DESCRIPTION_MAX = 512
 
 HASH_LENGTH = 12  # hex characters kept in the tag
 
@@ -218,6 +227,11 @@ def description(config: Config, name: str) -> str:
     # malformed argument of its own rather than as part of this one.
     if "\n" in text.strip():
         sys.exit(f"the description of '{name}' spans several lines; write it as `>-`")
+    if len(text.strip()) > DESCRIPTION_MAX:
+        sys.exit(
+            f"the description of '{name}' is {len(text.strip())} characters; "
+            f"GHCR shows at most {DESCRIPTION_MAX}"
+        )
     return text.strip()
 
 
@@ -438,6 +452,9 @@ def resolve(root: Path, config: Config) -> Plan:
             ),
             "cache": spec.get("cache", config["defaults"]["cache"]),
             "moving_tag": spec.get("moving_tag", "edge"),
+            # Also inside build_args, as IMAGE_DESCRIPTION; separately here for
+            # the manifest annotation, which the build action writes itself.
+            "description": description(config, name),
             "build_args": "\n".join(f"{k}={v}" for k, v in sorted(build_args.items())),
             "trivy_severity": ",".join(trivy["severity"]),
             "trivy_exit_code": "1" if trivy["fail"] else "0",

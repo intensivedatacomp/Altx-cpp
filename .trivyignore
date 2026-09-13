@@ -17,3 +17,14 @@
 # Format (trivy):
 #   CVE-2023-12345
 #   CVE-2023-12345 exp:2026-01-01
+
+# golang.org/x/sys v0.42.0 inside the actionlint binary that pre-commit builds
+# into dev-cpu (~/.cache/pre-commit/*/golangenv-*/bin/actionlint). Severity
+# UNKNOWN, so it never gated; it showed as a "Note" alert in the Security tab.
+# The flaw is in NewNTUnicodeString in golang.org/x/sys/windows, which a Linux
+# build does not compile -- trivy flags the module version, not the code. The
+# fix (x/sys 0.44.0) is not ours to make: pre-commit builds actionlint from its
+# own go.mod, and v1.7.12, the newest release, and actionlint's main branch
+# both still pin v0.42.0. Revisit by bumping `rev` in .pre-commit-config.yaml
+# once a release moves x/sys, then delete this entry.
+CVE-2026-39824 exp:2026-12-31
