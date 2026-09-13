@@ -18,7 +18,7 @@ separately in @ref code_quality.
 | ----------------- | ------------------------------------------------------------ | --------------------- |
 | `base-cpu`        | OpenBLAS (openmp build), LAPACKE, serial HDF5, libgomp        | built                 |
 | `dev-cpu`         | `base-cpu` + toolchain, Vim, clangd, gdb, Doxygen, uv, pre-commit | built             |
-| `runtime-cpu`     | `base-cpu` + `altx-serial`, `altx-omp`                        | builds; not yet enabled in `docker/images.yaml` |
+| `runtime-cpu`     | `base-cpu` + `altx-serial`, `altx-omp`                        | built                 |
 | `runtime-cpu-mpi` | + OpenMPI, parallel HDF5                                       | development stage 5   |
 | `dev-gpu`, `runtime-gpu` | + ROCm                                                  | development stage 6   |
 

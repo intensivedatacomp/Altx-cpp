@@ -13,7 +13,8 @@
 # follows from `parents`, so there is no layer number to keep in sync. The only
 # limit is depth: the workflow has one job per tier, and `MAX_TIERS` in
 # scripts/ci/images.py must equal the number of tier jobs written there. It is
-# currently 2 (base -> dev); adding runtime makes it 3.
+# currently 3 (base -> dev -> runtime); a fourth layer needs a `tier3` job in
+# .github/workflows/docker-images.yml as well as the constant.
 
 schema_version: 1
 
@@ -103,8 +104,7 @@ images:
     moving_tag: edge
 
   runtime-cpu:
-    # Stage 2. Nothing to compile until CMakeLists.txt exists.
-    enabled: false
+    enabled: true
     dockerfile: docker/runtime.Dockerfile
     parents:
       DEV_IMAGE: dev-cpu
@@ -115,26 +115,42 @@ images:
       - cmake/**
       - src/**
       - apps/**
-      - external/**
+      # Not `tests/**`: the builder stage configures with
+      # ALTX_ENABLE_TESTS=OFF, so no test source reaches this image and a
+      # change to one cannot change its content. The tests are CI's job
+      # (.github/workflows/build-test.yml), not the release image's.
+      #
+      # `external/**` joins this list when it exists -- a glob that matches
+      # nothing is a resolver error by design, so it cannot be added early.
+      #
+      # `.dockerignore` is listed because this is the one image whose content
+      # depends on it: it decides which files reach `COPY . .`, and therefore
+      # what `git describe` inside the builder sees.
+      - .dockerignore
     moving_tag: edge
 
   runtime-cpu-mpi:
     # Stage 5. Provisional: built against the distribution OpenMPI, since the
     # MPI flavour of the target cluster is unknown.
+    #
+    # `build_args: PRESETS` was written here before runtime.Dockerfile existed
+    # and is deliberately *not* carried: that Dockerfile builds two named
+    # presets into two named binaries, and an argument it does not read would
+    # be a setting that appears to work. Parameterising it -- a preset list, a
+    # matching binary-name list, and a check that the two are the same length
+    # -- belongs in the change that first builds this image.
     enabled: false
     dockerfile: docker/runtime.Dockerfile
     parents:
       DEV_IMAGE: dev-cpu
       BASE_IMAGE: base-cpu
-    build_args:
-      PRESETS: cpu-mpi-release cpu-omp-mpi-release
     inputs:
       - CMakeLists.txt
       - CMakePresets.json
       - cmake/**
       - src/**
       - apps/**
-      - external/**
+      - .dockerignore
     moving_tag: edge
 
   dev-gpu:
@@ -167,7 +183,7 @@ images:
       - cmake/**
       - src/**
       - apps/**
-      - external/**
+      - .dockerignore
     moving_tag: edge
 
 # ---------------------------------------------------------------------------

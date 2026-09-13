@@ -17,8 +17,15 @@ COPY . .
 # one path, in a throwaway build stage.
 RUN git config --global --add safe.directory /src
 
-RUN cmake --preset cpu-serial-release && cmake --build --preset cpu-serial-release && \
-    cmake --preset cpu-omp-release    && cmake --build --preset cpu-omp-release
+# `-DALTX_ENABLE_TESTS=OFF` on both: the tests are CI's job -- they run in
+# dev-cpu, across the whole preset matrix, in .github/workflows/build-test.yml
+# -- and nothing they produce reaches this image. Leaving them on would make
+# every release image build download and compile GoogleTest, so the image would
+# also stop building the day the network is unavailable, for output it discards.
+RUN cmake --preset cpu-serial-release -DALTX_ENABLE_TESTS=OFF && \
+    cmake --build --preset cpu-serial-release && \
+    cmake --preset cpu-omp-release -DALTX_ENABLE_TESTS=OFF && \
+    cmake --build --preset cpu-omp-release
 
 FROM ${BASE_IMAGE}
 COPY --from=builder /src/build/cpu-serial-release/apps/altx /usr/local/bin/altx-serial

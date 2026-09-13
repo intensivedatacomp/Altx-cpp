@@ -86,6 +86,11 @@ vcpkg_installed/
 Testing/
 .cache/
 
+# Coverage report -- scripts/ci/coverage.sh writes the tracefile, the genhtml
+# tree and the badge here. Only the badge is kept, and CI moves that to
+# .badges/coverage.svg, which *is* committed.
+coverage/
+
 # Python bytecode -- scripts/ci/ imports across modules, so this appears there
 __pycache__/
 *.pyc
