@@ -169,6 +169,20 @@ runs:
     # manifest: no pull, no push, no layer transfer. Across packages it is a
     # cross-repository blob mount, which is a registry-side operation for the
     # same reason.
+    #
+    # `--prefer-index=false` is not optional. By default imagetools does not
+    # copy a single source manifest; it wraps it in a new one-entry image index.
+    # Every retagged `edge` was such an index after the 2026-09-13 merge, with
+    # two consequences:
+    #
+    #   * the manifest under the index is an untagged GHCR version of its own,
+    #     so prune_packages.py deleted it and `base-cpu:edge` stopped resolving;
+    #   * the index carries no annotations, and the description label lives in
+    #     the image config beneath it, so the package pages showed none.
+    #
+    # With the flag the manifest is copied byte for byte -- same digest, which
+    # also makes a `-sha-` tag the same package version as the `-hash-` tag it
+    # names, as prune_packages.py assumes.
     - if: steps.check.outputs.exists == 'true' && inputs.push == 'true'
       shell: bash
       env:
@@ -180,7 +194,36 @@ runs:
         while read -r tag; do
           [[ -z "$tag" || "$tag" == "$ref" ]] && continue
           echo "retag $tag -> $ref"
-          docker buildx imagetools create -t "$tag" "$ref"
+          docker buildx imagetools create --prefer-index=false -t "$tag" "$ref"
+        done <<<"$TAGS"
+
+    # Every tag this job wrote -- by build or by retag -- must name a single
+    # image manifest, never an index. prune_packages.py deletes untagged
+    # versions, and the manifests under an index are exactly that, so a tag
+    # naming an index is an image the next prune breaks. Nothing here should
+    # produce one (`provenance: false` above, `--prefer-index=false` in the
+    # retag); this is what turns a regression into a red build instead of a
+    # broken `edge` that someone finds by pulling it.
+    #
+    # A multi-platform image would fail here on purpose: supporting one means
+    # teaching the prune about index children first. See prune_packages.py.
+    - name: Every tag names a single manifest
+      if: inputs.push == 'true'
+      shell: bash
+      env:
+        TAGS: ${{ steps.tags.outputs.list }}
+      run: |
+        set -euo pipefail
+        while read -r tag; do
+          [[ -z "$tag" ]] && continue
+          media=$(docker buildx imagetools inspect --raw "$tag" | jq -r .mediaType)
+          case "$media" in
+            application/vnd.oci.image.manifest.v1+json|application/vnd.docker.distribution.manifest.v2+json)
+              echo "$tag: $media" ;;
+            *)
+              echo "::error title=Tag names an index::$tag resolves to $media, not a single manifest"
+              exit 1 ;;
+          esac
         done <<<"$TAGS"
 
     # ---------------------------------------------------------------------

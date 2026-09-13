@@ -648,7 +648,16 @@ One assumption underneath all of this is worth naming, because it is true only b
 **untagged means garbage only while every image is single-platform.** A multi-platform build
 publishes an index, and each per-platform manifest under it is an untagged version of its own;
 deleting those leaves a tag pointing at children that no longer exist. Attestation manifests
-behave the same way, which is why the build passes `provenance: false`. `platforms` is a per-image
+behave the same way, which is why the build passes `provenance: false`. So does
+`docker buildx imagetools create`, which by default wraps even a single manifest in a new one-entry
+index instead of copying it. **That one happened.** On 2026-09-13 a merge rebuilt nothing, so
+`edge` was moved by retag. That turned every `edge` into an index, the prune then deleted the
+`base-cpu` manifest beneath its index, and `base-cpu:edge` stopped resolving. It also hid the new
+`org.opencontainers.image.description` label from the package pages, because the label lives in
+the image config under the index and the index itself carries no annotations. The retag now passes
+`--prefer-index=false`, which copies the manifest byte for byte. The build action also fails any
+tag it writes that resolves to an index, so "every tag names a single manifest" is checked on each
+run instead of assumed. `platforms` is a per-image
 key, so adding `linux/arm64` is a one-line change that would otherwise turn the prune job into a
 wrecking ball -- `prune_packages.py` therefore skips untagged deletion, with a warning annotation,
 for any image declaring more than one platform. Supporting it properly means resolving each
