@@ -89,16 +89,18 @@ multi-gigabyte dataset. 500 kB is deliberately tighter than the Python repositor
 | Hook           | Enforces                                              |
 | -------------- | ----------------------------------------------------- |
 | `clang-format` | Formatting of `.c`, `.cpp`, `.h`, `.hpp`, `.cu`       |
+| `omp-braces`   | A `{` block after every OpenMP block directive        |
 | `gersemi`      | Formatting of `CMakeLists.txt` and `*.cmake`          |
 
-Both rewrite files in place; a hook that reformats reports failure, so re-staging and committing
-again is the normal flow.
+`clang-format` and `gersemi` rewrite files in place. A hook that reformats reports failure, so
+re-staging and committing again is the normal flow. `omp-braces` only reports; the braces are yours
+to add.
 
 The style is a **minimal delta on Google**, not a `clang-format --dump-config` output — a full dump
 silently pins the project to one version's defaults and produces a large, meaningless diff on every
 upgrade. The genuine overrides are `IndentWidth: 4`, `ColumnLimit: 80`, `PointerAlignment: Right`
-with `DerivePointerAlignment: false`, `AccessModifierOffset: -4`, `Standard: c++20` and
-`BreakBeforeBraces: Allman`.
+with `DerivePointerAlignment: false`, `AccessModifierOffset: -4`, `Standard: c++20`,
+`BreakBeforeBraces: Allman` and `InsertBraces: true`.
 
 `Allman` is what puts every brace on a line of its own — after `if`, `for`, `while`, `switch`,
 `else`, `catch`, and after a function, class or namespace header:
@@ -124,6 +126,33 @@ what keeps one-line accessors and STL algorithm calls from costing four lines ea
 `AllowShortFunctionsOnASingleLine: Empty` and `AllowShortLambdasOnASingleLine: Empty` if the rule
 should be literal. Neither affects a braced `if` or `for` body — those are governed by
 `AllowShortBlocksOnASingleLine`, which Google already sets to `Never`.
+
+**Braces are required even around a one-line body.** `InsertBraces: true` makes clang-format add
+them to every `if`, `else`, `for`, `while` and `do`, so `if (x) return;` is written as four lines.
+clang-format cannot see OpenMP structured blocks, though, because a `#pragma` is an opaque line to
+it. The `omp-braces` hook (`scripts/check_omp_braces.py`) covers those:
+
+```cpp
+#pragma omp parallel for       // a loop directive: the for itself follows,
+for (int i = 0; i < n; ++i)    // and InsertBraces braces its body
+{
+    work(i);
+}
+
+#pragma omp critical           // a block directive: a { block is required,
+{                              // even for one statement
+    total += local;
+}
+```
+
+It checks the block directives: `parallel`, `critical`, `single`, `task`, `sections`, `section`,
+`master`, `masked`, `ordered`, `target`, `target data`, `teams`, `taskgroup`. It skips loop
+directives (`parallel for`, `simd`, `taskloop`, …), where a brace before the `for` is a compile
+error. It also skips `atomic`, which must be followed by an expression, and directives that take
+no statement, such as `barrier` or `ordered depend(…)`.
+
+@warning clang-format's documentation says `InsertBraces` works without full semantic information
+and can brace a macro-built body wrongly. Read the diff when a commit gets reformatted.
 
 @note `Stroustrup` is the near miss to avoid: it breaks only before function definitions, `else`
 and `catch`, and leaves `if`, `for`, `while` and `switch` attached.
@@ -193,6 +222,7 @@ suppression is indistinguishable from a defect somebody gave up on.
 | `mypy`         | `# type: ignore[type-arg]`      | `[[tool.mypy.overrides]]`              | `[tool.mypy]`              |
 | `codespell`    | `# codespell:ignore`            | —                                      | `ignore-words-list`        |
 | `clang-format` | `// clang-format off` … `on`    | —                                      | `.clang-format`            |
+| `omp-braces`   | `// omp-braces: ignore` on the `#pragma` line | —                        | —                          |
 | `hadolint`     | `# hadolint ignore=DL3008`      | —                                      | `.hadolint.yaml`           |
 | `shellcheck`   | `# shellcheck disable=SC2015`   | —                                      | —                          |
 

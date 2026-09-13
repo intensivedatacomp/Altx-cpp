@@ -1092,6 +1092,7 @@ Added for this project:
 | Hook                            | Purpose                                          |
 | ------------------------------- | ------------------------------------------------ |
 | `mirrors-clang-format`          | formatting, on changed files                     |
+| `omp-braces` (local)            | a `{` block after every OpenMP block directive   |
 | `gersemi`                       | `CMakeLists.txt` and `*.cmake` formatting        |
 | `hadolint`                      | the Dockerfiles in `docker/`                     |
 | `actionlint`                    | the workflows in `.github/workflows/`            |
@@ -1211,7 +1212,7 @@ paragraph.
 
 `ALT-CPP` already has a `.clang-format`: Google-based, `IndentWidth: 4`, `ColumnLimit: 80`,
 `PointerAlignment: Left`. The indent width and column limit are a reasonable house style and are
-worth carrying over. Four changes:
+worth carrying over. Five changes:
 
 1. **Commit a minimal delta, not a `--dump-config` output.** The existing file is a full dump of
    every option for one clang-format version. New releases add options and occasionally change
@@ -1243,6 +1244,28 @@ worth carrying over. Four changes:
    `AllowShortLambdasOnASingleLine: Empty` make the rule literal if that judgement changes. A
    braced `if` or `for` body is a separate option again, `AllowShortBlocksOnASingleLine`, which
    Google already sets to `Never`.
+5. **`InsertBraces: true`: braces around every body, one-liners included.** clang-format *adds* them
+   after `if`, `else`, `for`, `while` and `do`, rather than only complaining. A region's extent is
+   then read off its braces, and a second statement added under an unbraced `if` cannot silently
+   fall outside it. A `#pragma` is an opaque line to clang-format, though, so a single statement
+   under `#pragma omp critical` or `#pragma omp parallel` stays unbraced. clang-tidy's
+   `readability-braces-around-statements` does not look at OpenMP either. That half is a local
+   pre-commit hook, `scripts/check_omp_braces.py` (`omp-braces`). It requires a `{` block after
+   every *block* directive.
+   - **Loop directives are skipped.** After `parallel for`, `simd` or `taskloop` the `for`
+     statement itself must follow, a brace there is a compile error, and `InsertBraces` already
+     braces the loop body.
+   - **`atomic` is skipped** because it must be followed by an expression, and so are directives
+     that take no statement at all.
+   - **Unknown directives are not checked**, so a newer OpenMP spelling produces a missed check
+     rather than a false positive.
+   - **It reports and does not fix.** Where the closing brace goes is a statement boundary, which a
+     line-based script should not guess.
+   - **It is `language: system`.** It uses only the standard library, so there is no hook
+     environment for `dev.Dockerfile` to bake or prune.
+
+   clang-format's documentation warns that `InsertBraces` lacks full semantic information and can
+   brace a macro-built body wrongly, so a commit that it reformats deserves a look at the diff.
 
 ### Keeping the hook and the image in agreement
 

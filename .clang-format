@@ -70,3 +70,19 @@ Standard: c++20
 # Note that neither affects a braced `if`/`for` body: those are governed by
 # `AllowShortBlocksOnASingleLine`, which Google already sets to `Never`.
 BreakBeforeBraces: Allman
+
+# Braces around every `if`, `else`, `for`, `while` and `do` body, one-liners
+# included -- inserted, not merely checked. With `AllowShortBlocksOnASingleLine:
+# Never` (Google) and Allman above, `if (x) return;` becomes four lines. That is
+# the point: a region's extent is read off its braces, and a second statement
+# added under an unbraced `if` cannot silently fall outside it.
+#
+# Two limits worth knowing:
+#
+#   * clang-format's documentation warns that it inserts these without full
+#     semantic information, so a body built by a macro can be braced wrongly.
+#     Read the diff of a commit that this reformats.
+#   * it does not see OpenMP structured blocks. To clang-format a `#pragma` is an
+#     opaque line, so `#pragma omp critical` over a single statement is left
+#     unbraced. scripts/check_omp_braces.py, a pre-commit hook, covers that half.
+InsertBraces: true
