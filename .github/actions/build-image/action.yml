@@ -157,6 +157,18 @@ runs:
         labels: |
           org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           org.opencontainers.image.revision=${{ github.sha }}
+        # The description a second time, as a manifest annotation, because this
+        # is the copy GHCR reads. The Dockerfile's LABEL puts it in the image
+        # config, and GHCR shows a config label only for Docker v2 manifests:
+        # buildx here pushes OCI manifests, and all three package pages stayed
+        # blank with the label present in every config (checked 2026-09-13,
+        # against ../docker-builder, whose v2 manifests show theirs). The LABEL
+        # stays -- `docker inspect` and local builds read that one.
+        #
+        # An annotation lives in the manifest itself, so the retag below, which
+        # copies the manifest byte for byte, carries it to `edge` unchanged.
+        annotations: |
+          manifest:org.opencontainers.image.description=${{ fromJson(inputs.image).description }}
         cache-from: type=registry,ref=${{ fromJson(inputs.image).cache_ref }}
         cache-to: ${{ inputs.push == 'true'
                    && format('type=registry,ref={0},mode=max', fromJson(inputs.image).cache_ref)

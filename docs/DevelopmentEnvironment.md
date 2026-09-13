@@ -72,7 +72,9 @@ Every image also describes itself in `org.opencontainers.image.description`, whi
 its GHCR package page. The descriptions are the `description:` keys in `docker/images.yaml` —
 edit them there, not in a Dockerfile. Each one reaches its image as the `IMAGE_DESCRIPTION` build
 argument, because every Dockerfile builds more than one image. A description is part of the
-content hash, so rewording one republishes that image:
+content hash, so rewording one republishes that image. CI also writes each description into the
+image manifest as an annotation, and that copy is the one GHCR displays. It ignores the label on
+the OCI manifests buildx pushes. The label is what you can read locally:
 
 ```bash
 docker inspect --format '{{index .Config.Labels "org.opencontainers.image.description"}}' \

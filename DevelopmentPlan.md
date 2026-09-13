@@ -652,9 +652,10 @@ behave the same way, which is why the build passes `provenance: false`. So does
 `docker buildx imagetools create`, which by default wraps even a single manifest in a new one-entry
 index instead of copying it. **That one happened.** On 2026-09-13 a merge rebuilt nothing, so
 `edge` was moved by retag. That turned every `edge` into an index, the prune then deleted the
-`base-cpu` manifest beneath its index, and `base-cpu:edge` stopped resolving. It also hid the new
-`org.opencontainers.image.description` label from the package pages, because the label lives in
-the image config under the index and the index itself carries no annotations. The retag now passes
+`base-cpu` manifest beneath its index, and `base-cpu:edge` stopped resolving. At the time it was
+also blamed for the empty package pages, since the description label sat in a config under an
+index with no annotations of its own. That was not the whole cause: the pages stayed blank once
+`edge` was a plain manifest again (see the description below). The retag now passes
 `--prefer-index=false`, which copies the manifest byte for byte. The build action also fails any
 tag it writes that resolves to an index, so "every tag names a single manifest" is checked on each
 run instead of assumed. `platforms` is a per-image
@@ -686,7 +687,7 @@ Dockerfile turns it into the label. The obvious alternative, a literal `LABEL` i
 cannot work, because each of the three Dockerfiles builds several images (`base-cpu` and
 `base-gpu`, for instance). build-push-action's `labels:` would work in CI but not in
 `scripts/build_docker_images_locally.sh`, and that script is the second consumer this layout
-exists to keep honest. Three details:
+exists to keep honest. Four details:
 
 - **The `LABEL` is last** because an `ARG` takes part in the cache key of every `RUN` after it;
   declared any earlier, rewording a description would rebuild the whole image.
@@ -694,6 +695,15 @@ exists to keep honest. Three details:
   would ship its parent's description. An empty description is less wrong than someone else's.
 - **The description is part of the content hash**, because a label is image content. Without that,
   a rewording would never reach a published image, since its unchanged hash would skip the build.
+- **CI writes it a second time, as a manifest annotation**, and that copy is the one GHCR shows.
+  GHCR reads a config label only for Docker v2 manifests. buildx pushes OCI manifests here, and on
+  2026-09-13 all three package pages were blank even though every config carried the label.
+  `../docker-builder`, which pushes v2 manifests with a label and nothing else, shows its
+  description. The annotation is written by build-push-action's `annotations:`, from a
+  `description` field in the plan. The `LABEL` stays for `docker inspect` and local builds.
+  `HASH_SCHEMA` went to `v2` with this change, since an image whose hash already exists is retagged
+  rather than rebuilt and would otherwise never get the annotation. `images.py` also enforces
+  GHCR's 512-character limit, because a longer description is accepted silently and not shown.
 
 ### Python in the images: light only, installed with uv
 
@@ -967,7 +977,10 @@ reporting `base-cpu`'s own findings again. Bumping the date cleared all of them,
 close themselves when the next scan of that category no longer reports them.
 
 The conclusion to carry: **read the alert count as "how stale are the base layers", not as a list
-of things to fix one by one.** Nothing in `.trivyignore` was needed, and nothing should be added
+of things to fix one by one.** Nothing in `.trivyignore` was needed for those. Its first entry
+came the same day and is the other kind: `CVE-2026-39824`, an UNKNOWN-severity advisory against
+`golang.org/x/sys/windows` in the actionlint binary. That code is not compiled on Linux, and the fix
+is upstream's to release, so the entry carries an expiry. Nothing should be added
 for a finding that a rebuild fixes.
 
 #### Refreshing the package set without a human in the loop
