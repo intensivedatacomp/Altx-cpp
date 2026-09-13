@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["pyyaml"]
+# ///
 """Resolve ``docker/images.yaml`` into tags, build arguments and a CI matrix.
 
 The one idea worth stating up front: **every image reference is a pure function
@@ -46,10 +50,11 @@ Commands
 ``description NAME``  one image's description, disabled images included
 
 Run it anywhere: ``python3 scripts/ci/images.py plan``, or, if PyYAML is not
-installed, ``uv run --no-project --with pyyaml scripts/ci/images.py plan``.
-``--no-project`` because the repository's ``pyproject.toml`` configures the
-linters and declares nothing installable; without it uv reads that file as a
-project and materialises a ``.venv`` nobody asked for.
+installed, ``uv run scripts/ci/images.py plan``. uv reads the ``# /// script``
+block above (PEP 723), installs PyYAML into a cached environment, and treats
+this file as a standalone script -- rather than reading the repository's
+``pyproject.toml``, which configures the linters and declares nothing
+installable, as a project, and materialising a ``.venv`` nobody asked for.
 """
 
 from __future__ import annotations
@@ -69,7 +74,7 @@ try:
 except ImportError:  # pragma: no cover - environment problem, not a code path
     sys.exit(
         "PyYAML is required.\n"
-        "  uv run --with pyyaml scripts/ci/images.py ...\n"
+        "  uv run scripts/ci/images.py ...\n"
         "  python3 -m pip install pyyaml\n"
         "  apt-get install python3-yaml"
     )

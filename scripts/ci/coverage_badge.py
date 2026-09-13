@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Turn an lcov tracefile into a percentage and a badge, with no network.
 
 The Python implementation uses ``coverage-badge``, which reads coverage.py's
