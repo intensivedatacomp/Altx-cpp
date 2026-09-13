@@ -64,6 +64,15 @@ defaults:
 #
 #   enabled     Built at all. The plan rolls the matrix out in stages; a
 #               disabled entry documents the target without costing CI time.
+#   description What the image is for and what it carries, in one line.
+#               Required. Becomes the `org.opencontainers.image.description`
+#               label -- the text on the GHCR package page -- by way of the
+#               IMAGE_DESCRIPTION build argument, since three Dockerfiles each
+#               build several images and so cannot hold it themselves. Part of
+#               the hash, so a reworded description republishes the image; the
+#               LABEL is the last step of each Dockerfile, so that rebuild is
+#               a cache hit up to the label. One line: build arguments travel
+#               as one KEY=VALUE per line, so write it as a `>-` block.
 #   dockerfile  Path, relative to the repository root.
 #   parents     build-arg name -> image key. Establishes both the build order
 #               and the content-hash dependency: a parent that changes changes
@@ -84,6 +93,11 @@ defaults:
 images:
   base-cpu:
     enabled: true
+    description: >-
+      Altx-cpp base image, CPU flavour: Ubuntu 24.04 with only the
+      libraries the altx binaries load at run time -- OpenBLAS (OpenMP
+      build), LAPACKE, serial HDF5 and libgomp. The parent of dev-cpu and
+      runtime-cpu.
     dockerfile: docker/base.Dockerfile
     build_args:
       FLAVOR: cpu
@@ -91,6 +105,13 @@ images:
 
   dev-cpu:
     enabled: true
+    description: >-
+      Altx-cpp development image, CPU flavour: base-cpu plus GCC, CMake,
+      Ninja, gdb, Doxygen and lcov; clangd, clang-format and clang-tidy
+      18; uv with Python 3.14; pre-commit with its hook environments
+      pre-installed; and Vim with vim-lsp, vim-fugitive and system
+      clipboard support (pass DISPLAY and /tmp/.X11-unix). Runs as
+      non_root in /workspace.
     dockerfile: docker/dev.Dockerfile
     parents:
       BASE_IMAGE: base-cpu
@@ -105,6 +126,10 @@ images:
 
   runtime-cpu:
     enabled: true
+    description: >-
+      Altx-cpp runtime image, CPU flavour: base-cpu plus the release
+      binaries altx-serial and altx-omp, compiled in dev-cpu from the same
+      commit. No compiler and no tests.
     dockerfile: docker/runtime.Dockerfile
     parents:
       DEV_IMAGE: dev-cpu
@@ -140,6 +165,9 @@ images:
     # matching binary-name list, and a check that the two are the same length
     # -- belongs in the change that first builds this image.
     enabled: false
+    description: >-
+      Altx-cpp runtime image, CPU flavour with MPI: base-cpu plus OpenMPI,
+      parallel HDF5 and the MPI release binaries.
     dockerfile: docker/runtime.Dockerfile
     parents:
       DEV_IMAGE: dev-cpu
@@ -156,6 +184,9 @@ images:
   dev-gpu:
     # Stage 6, and only if AMD hardware is available.
     enabled: false
+    description: >-
+      Altx-cpp development image, GPU flavour: base-gpu plus the dev-cpu
+      toolchain and editor setup, with the ROCm SDK and hipcc.
     dockerfile: docker/dev.Dockerfile
     parents:
       BASE_IMAGE: base-gpu
@@ -166,6 +197,10 @@ images:
 
   base-gpu:
     enabled: false
+    description: >-
+      Altx-cpp base image, GPU flavour: ROCm on Ubuntu 24.04 with the
+      runtime libraries of base-cpu -- OpenBLAS (OpenMP build), LAPACKE,
+      serial HDF5 and libgomp.
     dockerfile: docker/base.Dockerfile
     build_args:
       FLAVOR: gpu
@@ -173,6 +208,9 @@ images:
 
   runtime-gpu:
     enabled: false
+    description: >-
+      Altx-cpp runtime image, GPU flavour: base-gpu plus the HIP release
+      binaries, compiled in dev-gpu from the same commit.
     dockerfile: docker/runtime.Dockerfile
     parents:
       DEV_IMAGE: dev-gpu

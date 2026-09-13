@@ -50,3 +50,20 @@ RUN update-alternatives --set libopenblas.so.0-x86_64-linux-gnu \
         /usr/lib/x86_64-linux-gnu/openblas-openmp/libopenblas.so.0 && \
     test "$(readlink -f /usr/lib/x86_64-linux-gnu/libblas.so.3)" \
        = "/usr/lib/x86_64-linux-gnu/openblas-openmp/libblas.so.3"
+
+# The description shown on the GHCR package page and by `docker inspect`. The
+# text lives in docker/images.yaml, next to the image it describes, and arrives
+# as a build argument -- from scripts/ci/images.py in CI, and from
+# scripts/build_docker_images_locally.sh locally -- because this Dockerfile
+# builds more than one image, and a literal here could be right for only one of
+# base-cpu and base-gpu. dev.Dockerfile and runtime.Dockerfile do the same.
+#
+# Last, and in every Dockerfile: an ARG takes part in the cache key of each RUN
+# that follows it, so declared any earlier, rewording a description would
+# rebuild the whole image instead of one metadata-only step.
+#
+# No default, deliberately. Labels are inherited, so a Dockerfile that did not
+# set one would ship its parent's description; a bare `docker build` getting an
+# empty description is less wrong than getting someone else's.
+ARG IMAGE_DESCRIPTION
+LABEL org.opencontainers.image.description="${IMAGE_DESCRIPTION}"

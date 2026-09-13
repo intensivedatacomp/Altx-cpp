@@ -670,6 +670,22 @@ The workflow's `GITHUB_TOKEN` is enough to delete, but only because the images c
 already load-bearing for pushing; it is what makes the packages inherit repository access at all.
 Unlink a package and the same token stops being able to clean it up.
 
+Every image also carries **`org.opencontainers.image.description`**, the text GHCR shows on the
+package page. It is a required `description:` per image in `docker/images.yaml`. `images.py`
+passes it as the `IMAGE_DESCRIPTION` build argument, and a `LABEL` at the very end of each
+Dockerfile turns it into the label. The obvious alternative, a literal `LABEL` in the Dockerfile,
+cannot work, because each of the three Dockerfiles builds several images (`base-cpu` and
+`base-gpu`, for instance). build-push-action's `labels:` would work in CI but not in
+`scripts/build_docker_images_locally.sh`, and that script is the second consumer this layout
+exists to keep honest. Three details:
+
+- **The `LABEL` is last** because an `ARG` takes part in the cache key of every `RUN` after it;
+  declared any earlier, rewording a description would rebuild the whole image.
+- **The `ARG` has no default.** Labels are inherited, so a Dockerfile that stopped setting one
+  would ship its parent's description. An empty description is less wrong than someone else's.
+- **The description is part of the content hash**, because a label is image content. Without that,
+  a rewording would never reach a published image, since its unchanged hash would skip the build.
+
 ### Python in the images: light only, installed with uv
 
 The development images carry a **light** Python: enough for `pre-commit` and small helper scripts,
@@ -699,7 +715,7 @@ For the light Python that does live in `dev-cpu` and `dev-gpu`, the answer to
   `scripts/gen_reference.py` runs. A helper script then behaves identically in both places instead
   of being written against whatever Ubuntu happens to ship. `python` is not a rename of anything:
   Ubuntu provides no unversioned alias at all, and the python3.12 that exists is incidental --
-  `vim-nox` depends on it. Both stay under `/usr/bin`; `${HOME}/.local/bin` merely comes first.
+  Vim depends on it. Both stay under `/usr/bin`; `${HOME}/.local/bin` merely comes first.
 
   **The order of that step against the pre-commit layer is load-bearing, in both directions.** It
   must come *after*, because `uv tool install` resolves the default interpreter: install 3.14 first
@@ -837,6 +853,23 @@ Two details make it work, and both are the sort that look like the feature is br
 
 `cspell.config.yaml` is YAML rather than `cspell.json` so that it can carry comments past the
 `check-json` hook. It gates nothing; codespell remains the checker that gates commits.
+
+**The system clipboard is the X11 one, reached through `vim-gtk3`**, the same arrangement as the
+`docker-builder` images. `vim-gtk3` is the only Vim in Ubuntu built with `+clipboard`. `vim-nox`
+has no X11 support, so `"+y` there yanks into a register nothing outside the container can read.
+`DISPLAY` and `/tmp/.X11-unix` are passed in at run time. The host admits the container with
+`xhost +SI:localuser:$(id -un)`, which is narrower than docker-builder's `xhost +local:` (that
+admits every local process of every user). It is enough because the container user already shares
+the developer's uid, the same arrangement that keeps bind-mounted files correctly owned. `xclip`
+comes along for the shell. The price is about 125 GTK and X11 packages that the terminal editor
+never draws with, in an image whose Trivy gate must stay green. Rejected alternatives:
+
+- **OSC 52**, which copies through a terminal escape sequence and needs neither an X server nor
+  any packages. It only copies, never pastes. It needs a `TextYankPost` hook or a plugin, and it
+  depends on the terminal (and tmux) passing the sequence through. It is the better answer over
+  SSH, and the one to add if these images are ever used interactively on a remote machine.
+- **`vim-nox` plus `xclip` mappings** (`:w !xclip`, `:r !xclip -o`), which keeps the image smaller
+  but reimplements registers badly and still needs the X socket.
 
 The same image is used for VS Code through `.devcontainer/devcontainer.json`, so both editors
 resolve symbols identically -- same clangd, same flags, same `compile_commands.json`, mounted at

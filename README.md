@@ -17,6 +17,15 @@ docker run --pull always --rm -it -v "$PWD:/workspace" -w /workspace \
 without it Docker pulls only when the tag is missing locally, so a stale `edge` from last month
 would keep starting silently. Drop it to work offline, or once the pull becomes the slow part.
 
+For the system clipboard in Vim (`"+y`, `"+p`), also hand the container your X11 display:
+
+```bash
+xhost +SI:localuser:"$(id -un)"   # on the host, once per login session
+docker run --pull always --rm -it -v "$PWD:/workspace" -w /workspace \
+    -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
+    ghcr.io/intensivedatacomp/altx-cpp/dev-cpu:edge
+```
+
 To build the image yourself instead — which is also how you get one matching your own uid — use
 `./scripts/build_docker_images_locally.sh --target dev` and run `altx-cpp/dev-cpu:local`.
 
