@@ -80,7 +80,10 @@ HASH_LENGTH = 12  # hex characters kept in the tag
 # The workflow defines one job per tier, and a job cannot be generated. Adding a
 # fourth layer to the chain is therefore a workflow edit as well as a config
 # edit, and this is where that is said out loud rather than discovered.
-MAX_TIERS = 2
+#
+# 3 since runtime-cpu was enabled: base -> dev -> runtime. `emit_github_output`
+# checks the resolved depth against this and says which file to edit.
+MAX_TIERS = 3
 
 # ``images.yaml`` is free-form nested YAML and ``resolve`` builds an equally
 # free-form record out of it, so the value type really is Any. Naming the two

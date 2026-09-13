@@ -44,7 +44,7 @@ it can live without making commits slow or unreliable.
 | ------------ | ------------------------------ | ------------------------------------------------- |
 | `pre-commit` | nothing but the changed files  | everything in @ref quality_checks                  |
 | `pre-push`   | the whole tree, still local    | Doxygen documentation coverage — not yet written   |
-| CI           | a **configured build**         | clang-tidy, `-Wdocumentation`, coverage — stage 2+ |
+| CI           | a **configured build**         | the preset matrix, `ctest`, coverage; clang-tidy and `-Wdocumentation` still to come |
 
 clang-tidy is deliberately *not* a commit hook: it needs `compile_commands.json`, which exists only
 after CMake has configured a build directory. A hook that silently skips when that file is missing
@@ -278,6 +278,37 @@ make them wait on the image build, and deadlock on a pull request that changes a
 
 `--show-diff-on-failure` is passed, so when a formatter fails the log contains the patch to apply
 rather than only the news that something was wrong.
+
+@subsection quality_ci_build The build and test job
+
+`.github/workflows/build-test.yml` is the other half: it configures, builds and `ctest`s the preset
+matrix **inside `dev-cpu`**, at the content hash resolved from the working tree. A pull request
+gets `cpu-omp-release` and `cpu-serial-debug` (ASan and UBSan); a merge to `main` gets all four CPU
+presets. `-DALTX_WERROR=ON` is added on the configure line — the single difference between what CI
+builds and what you build — and `ctest` excludes the `slow` and `gpu` labels.
+
+@note Unlike the hook job above, this one *must* run in the image: `runtime-cpu` is compiled inside
+`dev-cpu`, so building anywhere else would test a toolchain nothing ships with.
+
+@subsection quality_ci_coverage Coverage
+
+The same workflow builds the `coverage` preset and publishes an HTML report as a workflow artefact;
+a push to `main` also commits `.badges/coverage.svg`, which is what the README renders. One command
+reproduces all of it inside `dev-cpu`:
+
+```bash
+scripts/ci/coverage.sh          # or --skip-build, to reuse build/coverage
+```
+
+CI calls that same script, so the number cannot depend on how a workflow happens to invoke lcov.
+Two things are worth knowing before reading a report:
+
+- **Never-executed files still count.** A translation unit with no `.gcda` would simply be missing
+  from the report — the least covered code leaving the denominator — so the script also captures
+  the `.gcno` baseline and merges the two. Code that no test touches shows as 0%, which is the
+  point.
+- **`tests/` is excluded, and so is everything under `build/`**, GoogleTest included. The number is
+  coverage of the code that ships.
 
 @section quality_upgrading Upgrading the hooks
 

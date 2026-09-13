@@ -1,0 +1,216 @@
+name: Build and test
+
+# Configure, build and `ctest` the preset matrix, inside the development image.
+#
+# The container is the point. `runtime-cpu` is produced by compiling inside
+# `dev-cpu`, so building anywhere else here would test a toolchain nothing
+# ships with. The image is named by its content hash, computed from the working
+# tree by the same resolver `docker-images.yml` builds with -- no data flows
+# between the two workflows, only the guarantee that both compute the same
+# name from the same tree.
+on:
+  push:
+    branches: [main]
+    # The coverage job commits a badge to `main`. Without this, that commit
+    # starts another run of this workflow, which produces the same badge.
+    paths-ignore: ['.badges/**']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+# `head_ref` for a pull request, `ref_name` for a push, and the event in the
+# key: a push to a branch with an open pull request runs both, and the two check
+# different trees -- the branch as written, and its merge into the base.
+concurrency:
+  group: build-test-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  # Resolves two things the matrix below cannot compute for itself: which image
+  # to run in, and which presets this event is worth spending.
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      image:   ${{ steps.image.outputs.ref }}
+      presets: ${{ steps.presets.outputs.list }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet pyyaml
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The hash tag is the correct answer, and it is not always available: a
+      # pull request that edits docker/dev.Dockerfile changes the hash, and
+      # `docker-images.yml` may not have finished publishing it -- the two
+      # workflows are triggered together and GitHub orders neither against the
+      # other. Falling back to `edge` keeps the build honest about what it
+      # used rather than failing on a race, and the warning is what stops that
+      # from becoming the normal case unnoticed.
+      - id: image
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ref=$(python3 scripts/ci/images.py ref dev-cpu)
+          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+            echo "ref=$ref" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Development image::$ref"
+          else
+            fallback="ghcr.io/${GITHUB_REPOSITORY,,}/dev-cpu:edge"
+            echo "ref=$fallback" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Development image not published yet::$ref does not exist; falling back to $fallback. The build below does not match this tree's dev image."
+          fi
+
+      # A pull request has ten minutes to be useful, so it gets the two presets
+      # that disagree most: the primary release configuration, and a serial
+      # debug build with ASan and UBSan, which catches the undefined behaviour
+      # the optimiser hides. A merge to `main` affords all four.
+      - id: presets
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == pull_request ]]; then
+            echo 'list=["cpu-omp-release","cpu-serial-debug"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'list=["cpu-serial-debug","cpu-omp-debug","cpu-serial-release","cpu-omp-release"]' >> "$GITHUB_OUTPUT"
+          fi
+
+  build-test:
+    needs: prepare
+    runs-on: ubuntu-latest
+    # A pull request from a fork cannot pull a private package, so this job
+    # will fail there rather than silently testing nothing. That is the same
+    # trade `docker-images.yml` makes with its SARIF upload, and it changes the
+    # day the packages become public.
+    container:
+      image: ${{ needs.prepare.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      # The image runs as `non_root` (uid 1000) and the workspace belongs to
+      # the runner's user (uid 1001), so the build directory would be
+      # unwritable. Root inside a throwaway container costs nothing.
+      options: --user 0
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: ${{ fromJson(needs.prepare.outputs.presets) }}
+    name: ${{ matrix.preset }}
+    steps:
+      # Full history: the version header comes from `git describe --tags`, and
+      # a shallow clone has no tags to describe against.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # git refuses a repository owned by another user, and this job is root in
+      # a checkout the runner made. Without it the build succeeds and stamps
+      # every binary `unknown`; see cmake/GitVersion.cmake, which warns.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # `-DALTX_WERROR=ON` rather than a `ci-*` preset per configuration: it is
+      # the single difference between what CI builds and what a developer
+      # builds, and duplicating four configure, build and test presets to
+      # express one cache variable would make the two drift apart.
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} -DALTX_WERROR=ON
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      # Everything except the labels that need hardware this runner does not
+      # have (`gpu`) or time a pull request does not have (`slow`).
+      - name: Test
+        run: >
+          ctest --preset ${{ matrix.preset }}
+          --label-exclude 'slow|gpu'
+          --output-junit ctest-${{ matrix.preset }}.xml
+
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ctest-${{ matrix.preset }}
+          path: |
+            build/${{ matrix.preset }}/ctest-*.xml
+            build/${{ matrix.preset }}/Testing/**/*.log
+          if-no-files-found: ignore
+
+  # Separate from the matrix above: coverage needs its own build type and its
+  # own instrumentation, and it is the one job that writes to the repository.
+  coverage:
+    needs: prepare
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.prepare.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 0
+    permissions:
+      # For the badge commit below, and for that only.
+      contents: write
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # The same script a developer runs in the same image, so a number that
+      # looks wrong here can be reproduced in one command locally.
+      - id: coverage
+        run: scripts/ci/coverage.sh
+
+      - name: Summary
+        run: |
+          {
+            echo "## Coverage: ${{ steps.coverage.outputs.percentage }}%"
+            echo
+            echo '```'
+            lcov --quiet --ignore-errors mismatch,unused,empty \
+                 --list coverage/coverage.info
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-report
+          path: |
+            coverage/html
+            coverage/coverage.info
+            coverage/coverage.svg
+
+      # Committed to the repository rather than fetched from shields.io, so the
+      # README renders from the repository itself -- the pattern the Python
+      # implementation already uses. `paths-ignore` at the top of this file is
+      # what keeps this commit from triggering another run.
+      #
+      # Guarded on the repository name as well as the event: a fork whose
+      # owner pushes to their own `main` should not have a workflow of ours
+      # writing to it.
+      - name: Deploy the coverage badge
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main'
+                && github.repository == 'intensivedatacomp/Altx-cpp' }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p .badges
+          mv coverage/coverage.svg .badges/coverage.svg
+          git add .badges/coverage.svg
+          # Nothing to do when the percentage has not moved, which is the
+          # common case and must not fail the job.
+          git diff --cached --quiet \
+            || git commit -m "Update coverage badge (${{ steps.coverage.outputs.percentage }}%)"
+          git push origin HEAD:main

@@ -34,3 +34,15 @@ gtest_discover_tests(
     PROPERTIES LABELS unit
     DISCOVERY_MODE PRE_TEST
 )
+
+# The executable runs at all. A plain `add_test` rather than a GoogleTest case,
+# because the thing under test is a *process*: linking `main` into a test
+# binary would test something else, and `$<TARGET_FILE:altx>` is the only
+# spelling that survives a change of output directory.
+#
+# It is also what makes the coverage number mean something. `apps/` is compiled
+# into the coverage build either way, but a binary that is never executed
+# writes no .gcda, so without this the one shipped translation unit would be
+# reported at zero.
+add_test(NAME cli.runs COMMAND altx)
+set_tests_properties(cli.runs PROPERTIES LABELS integration)

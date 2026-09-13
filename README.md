@@ -1,5 +1,9 @@
 # Altx-cpp
 
+[![Pre-commit](https://github.com/intensivedatacomp/Altx-cpp/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/intensivedatacomp/Altx-cpp/actions/workflows/pre-commit.yml)
+[![Build and test](https://github.com/intensivedatacomp/Altx-cpp/actions/workflows/build-test.yml/badge.svg)](https://github.com/intensivedatacomp/Altx-cpp/actions/workflows/build-test.yml)
+![Coverage](.badges/coverage.svg)
+
 ## Development
 
 Start an interactive development session with the repository mounted:
@@ -41,6 +45,14 @@ the resolved set. The first configure downloads GoogleTest, so it needs the netw
 
 The version is not written down anywhere: `git describe` is read at build time into a generated
 `core/Version.hpp`, and the full commit hash goes into the provenance of every output file.
+
+Coverage, with the HTML report in `coverage/html/` and the badge above regenerated:
+
+```bash
+scripts/ci/coverage.sh          # inside dev-cpu, which has lcov and genhtml
+```
+
+CI runs the same script, so a number that looks wrong there reproduces here in one command.
 
 ## Contributing
 

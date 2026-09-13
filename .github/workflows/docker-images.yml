@@ -43,6 +43,7 @@ jobs:
       retention: ${{ steps.plan.outputs.retention }}
       tier0:     ${{ steps.plan.outputs.tier0 }}
       tier1:     ${{ steps.plan.outputs.tier1 }}
+      tier2:     ${{ steps.plan.outputs.tier2 }}
       push:      ${{ steps.mode.outputs.push }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -101,6 +102,37 @@ jobs:
           push:  ${{ needs.prepare.outputs.push }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
+  # The runtime images. One tier deeper than dev because they are multi-stage:
+  # `FROM dev-cpu AS builder` compiles the presets, and the binaries are copied
+  # into base-cpu. This is the only tier whose content depends on src/ and
+  # apps/, so it is the only one a C++ change rebuilds.
+  tier2:
+    needs: [prepare, tier0, tier1]
+    if: ${{ !cancelled() && needs.tier0.result != 'failure' && needs.tier1.result != 'failure'
+            && needs.prepare.outputs.tier2 != '[]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJson(needs.prepare.outputs.tier2) }}
+    name: ${{ matrix.image.name }}
+    steps:
+      # Full history, unlike the tiers above: the builder stage runs
+      # `git describe --tags` to stamp the binaries, and a shallow clone has no
+      # tags to describe against.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/build-image
+        with:
+          image: ${{ toJson(matrix.image) }}
+          push:  ${{ needs.prepare.outputs.push }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   # Deletes what this build superseded: previous `edge` manifests, now
   # untagged, in the per-image packages, and hash-/sha- versions past the keep
   # window in buildcache. The policy is docker/images.yaml's `retention:` block.
@@ -109,7 +141,7 @@ jobs:
   # several jobs decide "this is the sixth newest, drop it" from different
   # snapshots of one package.
   prune:
-    needs: [prepare, tier0, tier1]
+    needs: [prepare, tier0, tier1, tier2]
     # Only after a build that published, and only if nothing failed: pruning
     # against a half-built matrix expires an old image while its replacement
     # does not exist. `!cancelled()` keeps this eligible when a tier was
@@ -117,7 +149,8 @@ jobs:
     # supersedes nothing.
     if: ${{ !cancelled() && github.event_name != 'pull_request'
             && needs.prepare.outputs.push == 'true'
-            && needs.tier0.result != 'failure' && needs.tier1.result != 'failure' }}
+            && needs.tier0.result != 'failure' && needs.tier1.result != 'failure'
+            && needs.tier2.result != 'failure' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
