@@ -103,10 +103,10 @@ jobs:
   build-test:
     needs: prepare
     runs-on: ubuntu-latest
-    # A pull request from a fork cannot pull a private package, so this job
-    # will fail there rather than silently testing nothing. That is the same
-    # trade `docker-images.yml` makes with its SARIF upload, and it changes the
-    # day the packages become public.
+    # The packages are public, so a fork's pull request can pull this image and
+    # the credentials below are not what makes it work -- they raise the
+    # anonymous pull limit and would keep the job working if the packages were
+    # ever made private again.
     container:
       image: ${{ needs.prepare.outputs.image }}
       credentials:
@@ -210,6 +210,10 @@ jobs:
       # README renders from the repository itself -- the pattern the Python
       # implementation already uses. `paths-ignore` at the top of this file is
       # what keeps this commit from triggering another run.
+      #
+      # `main` is protected and this push is permitted through it. If that ever
+      # changes, this step is where it shows, and the alternative is a badge
+      # committed to a branch rather than a softer failure here.
       #
       # Guarded on the repository name as well as the event: a fork whose
       # owner pushes to their own `main` should not have a workflow of ours

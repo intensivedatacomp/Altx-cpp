@@ -894,8 +894,12 @@ development images included.
 > start failing every pull request, including ones that touch no Dockerfile. The remedy is a
 > rebuild, and a rebuild only happens when the content hash changes -- so it takes an edit to the
 > Dockerfile. `apt-get upgrade` is what makes that edit *sufficient*; before it, rebuilding
-> refreshed only the packages the Dockerfile names. The remaining gap is that nothing rebuilds on a
-> schedule, which is `nightly.yml`'s job when it arrives.
+> refreshed only the packages the Dockerfile names.
+>
+> **The remaining gap -- that nothing rebuilds on a schedule -- is closed**, and not by
+> `nightly.yml`: see [Refreshing the package set](#refreshing-the-package-set-without-a-human-in-the-loop)
+> below. It belongs in `docker-images.yml` because that workflow already knows how to build, tag,
+> publish, scan and prune an image; a second workflow would be a second copy of all of it.
 >
 > What this does **not** change: VTune. It stays behind `ARG WITH_VTUNE=0`, and if the 2--3 GB
 > Intel layer does turn out to carry an irreducible backlog, the per-image `trivy:` override in
@@ -923,6 +927,51 @@ close themselves when the next scan of that category no longer reports them.
 The conclusion to carry: **read the alert count as "how stale are the base layers", not as a list
 of things to fix one by one.** Nothing in `.trivyignore` was needed, and nothing should be added
 for a finding that a rebuild fixes.
+
+#### Refreshing the package set without a human in the loop
+
+Bumping a date by hand in response to an alert is a process that works exactly as long as someone
+is watching, which is the property that makes it the wrong mechanism. Two things freeze an image's
+package set, and an automatic refresh has to defeat **both**:
+
+1. the workflow skips a build whose content hash already exists -- correct, an unchanged tree
+   should not produce a new image;
+2. buildx reuses the apt layer, whose cache key is its instruction text plus the parent image, and
+   neither changes when a security update lands in the archive.
+
+`docker-images.yml` therefore runs **weekly** (Monday 04:00 UTC), and on that run -- or a manual
+one with `force_rebuild` -- the build-image action skips the existence check *and* passes
+`--build-arg APT_SNAPSHOT=<today>` to every image whose Dockerfile declares it. The first makes
+buildx run; the second is what actually refreshes anything. Everything downstream is unchanged, so
+the refreshed image is tagged, scanned, gated and pruned exactly as a normal build, and stale
+alerts close themselves when the next scan of that category stops reporting them.
+
+The date literal stays in the Dockerfiles, with a smaller job: it is a **floor** ("at least this
+fresh"), and editing it is how a *specific tree* forces the refresh, since only that changes the
+content hash and rebuilds every descendant immediately. The routine case no longer needs it.
+
+What this concedes, stated rather than hidden: an image published under `hash-<digest>` may then
+contain a package set that a local `docker build` of that tree would not reproduce. That is not a
+new concession -- Ubuntu keeps one version per package, which is why `DL3008` is silenced and why
+the versions were never pinned -- so the hash has always named the **inputs**, not the bytes.
+Reproducing a particular CI run still works: that is what the `-sha-` tags are for, and they stay
+on the manifest they were written against.
+
+Three alternatives, and why not:
+
+- **Pin package versions and let a bot bump them.** Rejected already, under
+  [Build structure](#build-structure): Ubuntu's archive keeps one version per package, so a pin
+  starts failing the moment a security update lands.
+- **A scheduled job that edits the date and opens a pull request.** It keeps the hash honest, and
+  it does not work here: a push or pull request made with `GITHUB_TOKEN` triggers no workflows, so
+  the one change whose entire purpose is to rebuild the images would arrive with no image build to
+  review. A personal access token would fix that by taking the guard off, which is a poor trade for
+  a cosmetic gain.
+- **A content-addressed cache buster** -- `ADD` of a URL whose checksum changes when the archive
+  moves, such as the `noble-security` `Release` file -- so a forced rebuild is a full cache hit in
+  the weeks when nothing changed. It is the better mechanism if the weekly rebuild ever costs too
+  much CI time, at the price of a build that fails when a URL moves. Worth revisiting when the GPU
+  images, which are far more expensive to rebuild, join the matrix.
 
 Size expectation: `runtime-cpu` in the low hundreds of MB, `runtime-gpu` several GB. The ROCm
 layer dominates and is reduced by installing the ROCm *runtime* rather than the full SDK in the
@@ -1160,7 +1209,7 @@ only one source.
 | Workflow            | Trigger                                            | Does                                                    |
 | ------------------- | -------------------------------------------------- | ------------------------------------------------------- |
 | `pre-commit.yml`    | push to **any** branch, pull request, manual       | the same hooks as the local pre-commit                   |
-| `docker-images.yml` | push to `main` / `**docker**` / `v*`, PR, manual   | build the image matrix if the content hash is absent; push and Trivy-scan |
+| `docker-images.yml` | push to `main` / `**docker**` / `v*`, PR, manual, **weekly** | build the image matrix if the content hash is absent; push and Trivy-scan. The weekly run rebuilds regardless and refreshes apt |
 | `build-test.yml`    | pull request, push to `main`                       | the preset matrix: configure, build, `ctest`             |
 | `nightly.yml`       | schedule                                           | sanitizers, GPU build, Trivy, benchmarks                 |
 | `release.yml`       | push of git tag `v*`                               | rebuild all, version tags, Trivy gating, GitHub release  |

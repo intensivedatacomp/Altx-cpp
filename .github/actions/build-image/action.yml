@@ -8,6 +8,12 @@ inputs:
   push:
     description: "'true' to publish to GHCR, 'false' to build only."
     required: true
+  force:
+    description: >
+      "'true' to rebuild even when the content hash already exists, and to
+      refresh the apt package set while doing it. The weekly schedule sets it."
+    required: false
+    default: 'false'
   token:
     description: GHCR token. A composite action has no `secrets` context, so it
       must be passed in.
@@ -78,15 +84,57 @@ runs:
       shell: bash
       env:
         IMAGE: ${{ inputs.image }}
+        FORCE: ${{ inputs.force }}
       run: |
         set -euo pipefail
         ref=$(jq -r .ref <<<"$IMAGE")
-        if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+        if [[ "$FORCE" == "true" ]]; then
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Forced rebuild::$ref will be rebuilt and republished"
+        elif docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
           echo "exists=true" >> "$GITHUB_OUTPUT"
           echo "::notice title=Skipping build::$ref already exists"
         else
           echo "exists=false" >> "$GITHUB_OUTPUT"
         fi
+
+    # The other half of a forced rebuild, and the half that actually refreshes
+    # anything. Skipping the existence check only gets buildx to run; buildx
+    # would then reuse every layer, because the cache key of the apt layer is
+    # its own instruction text, which has not changed. Passing today's date as
+    # APT_SNAPSHOT changes that text's *expansion*, which invalidates the layer
+    # and everything after it, so `apt-get upgrade` resolves against today's
+    # archive rather than against the day the layer was first built.
+    #
+    # Only for images whose Dockerfile declares the argument -- runtime images
+    # install nothing -- because an undeclared build argument is a warning on
+    # every build, and a warning nobody must act on is noise.
+    #
+    # Consequence, stated rather than hidden: the image published under
+    # `hash-<digest>` then contains a package set that a local `docker build` of
+    # the same tree would not reproduce. That is already true of every apt
+    # install here -- Ubuntu keeps one version per package, which is why DL3008
+    # is silenced -- so the hash names the *inputs*, never the bytes.
+    - id: refresh
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        FORCE: ${{ inputs.force }}
+      run: |
+        set -euo pipefail
+        extra=""
+        if [[ "$FORCE" == "true" ]]; then
+          dockerfile=$(jq -r .dockerfile <<<"$IMAGE")
+          if grep -q '^ARG APT_SNAPSHOT=' "$dockerfile"; then
+            extra="APT_SNAPSHOT=$(date -u +%F)"
+            echo "::notice title=Refreshing packages::$extra"
+          fi
+        fi
+        {
+          echo "build_args<<ARGS"
+          echo "$extra"
+          echo ARGS
+        } >> "$GITHUB_OUTPUT"
 
     - id: build
       if: steps.check.outputs.exists == 'false'
@@ -98,8 +146,11 @@ runs:
         push: ${{ inputs.push == 'true' }}
         load: ${{ inputs.push != 'true' }}
         tags: ${{ steps.tags.outputs.list }}
+        # Empty lines are ignored, so the second entry disappears on an
+        # ordinary build and the Dockerfile's own default stands.
         build-args: |
           ${{ fromJson(inputs.image).build_args }}
+          ${{ steps.refresh.outputs.build_args }}
         # This label is what links the GHCR package to the repository, which is
         # in turn what lets GITHUB_TOKEN write and later delete it. It has to be
         # right on `buildcache` too, which is a package like any other.

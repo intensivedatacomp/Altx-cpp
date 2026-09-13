@@ -20,16 +20,20 @@ ENV DEBIAN_FRONTEND=noninteractive
 # and the real guarantee is that scripts/ci/images.py hashes this file byte for
 # byte, so the image identity tracks its contents.
 #
-# APT_SNAPSHOT is what makes that upgrade mean anything. Bump the date to force
-# a package refresh; see docker/dev.Dockerfile, where the same argument is
-# spelled out at length and where the failure that motivated it happened.
+# APT_SNAPSHOT is what makes that upgrade mean anything, and the weekly
+# `force_rebuild` run of .github/workflows/docker-images.yml is what supplies a
+# current value for it. The date below is a floor, not a schedule: editing it
+# forces a refresh on this *tree* by changing the content hash, which is the
+# case the weekly run cannot serve. See docker/dev.Dockerfile, where the
+# argument is spelled out at length and where the failure that motivated it
+# happened.
 #
 # 2026-09-13: libc6 and libc-bin were pinned at 2.39-0ubuntu8.8 while the
 # archive had 8.9, which is six fixed glibc advisories the images were carrying
 # for no reason. They are MEDIUM, so the CRITICAL/HIGH gate never fired -- the
 # signal came from the Security tab, where the SARIF upload deliberately
-# reports every severity. That is the same feedback loop one step quieter, and
-# it gets the same answer.
+# reports every severity. Noticing that by hand is precisely what the weekly
+# run now removes.
 ARG APT_SNAPSHOT=2026-09-13
 RUN echo "apt snapshot ${APT_SNAPSHOT}" && \
     apt-get update && apt-get upgrade -y --no-install-recommends \

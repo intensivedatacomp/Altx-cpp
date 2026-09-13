@@ -30,21 +30,26 @@ ENV DEBIAN_FRONTEND=noninteractive
 # the bump also changes the image's content hash, so CI rebuilds rather than
 # reusing the published image and re-scanning it.
 #
-# **Bump it when Trivy reports a fixed vulnerability in a system package.**
-# That is the feedback loop this argument exists to close: the scanner says the
-# archive is ahead of the image, and this is the one-line answer. The gate
-# (CRITICAL/HIGH) is the loud half of that signal; the Security tab carries the
-# rest, because the SARIF upload reports every severity on purpose. A MEDIUM
-# finding with a fixed version is the same fact arriving quietly.
+# **Routine refreshes are automatic, and this date is not what performs them.**
+# .github/workflows/docker-images.yml runs weekly with `force_rebuild`, which
+# skips the "content hash already exists" check and passes
+# `--build-arg APT_SNAPSHOT=<today>`. That invalidates this layer the same way
+# an edit would, so the package set follows the archive without anyone watching
+# the Security tab. Editing the date here is for the case the schedule cannot
+# serve: a *specific tree* that must carry the fixed package, since only a
+# change to this file changes the content hash and so rebuilds every descendant
+# on the spot.
 #
-# Passing `--build-arg APT_SNAPSHOT=...` forces a refresh without editing the
-# file, but then the build no longer matches its content hash -- the default
-# here is the source of truth.
+# The value below is therefore a floor -- "the packages are at least this
+# fresh" -- and the published image may be fresher. That is not a new
+# concession: Ubuntu keeps one version per package, which is why DL3008 is
+# silenced, so the hash has always named the *inputs* rather than the bytes.
 #
 # 2026-09-13: libc6/libc-bin at 2.39-0ubuntu8.8 against 8.9 in the archive (six
 # glibc advisories), and Ubuntu's python3.12 -- present only because vim-nox
 # depends on it -- at 3.12.3-1ubuntu0.16 against 0.17 (two more). All eight
-# MEDIUM, all fixed upstream, none of them ours to patch.
+# MEDIUM, all fixed upstream, none of them ours to patch. Bumped by hand, which
+# is the last time that should be necessary.
 ARG APT_SNAPSHOT=2026-09-13
 RUN echo "apt snapshot ${APT_SNAPSHOT}" && \
     apt-get update && apt-get upgrade -y --no-install-recommends \
