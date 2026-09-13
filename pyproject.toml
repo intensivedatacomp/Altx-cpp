@@ -12,8 +12,11 @@
 # with `uvx pre-commit run --all-files`; see .pre-commit-config.yaml.
 #
 # One consequence of the file existing at all: uv now treats this directory as a
-# project, so `uv run` creates a `.venv` here. Pass `--no-project` when running a
-# script ad hoc, as scripts/ci/images.py documents.
+# project, so `uv run` on a plain script creates a `.venv` here and warns "No
+# `requires-python` value found in the workspace". Every Python script under
+# scripts/ therefore opens with a PEP 723 `# /// script` block declaring its
+# Python version and dependencies, which makes `uv run scripts/...` treat it as
+# a standalone script instead. A new script needs the same block.
 
 # --------------------------------------------------
 # Ruff -- linting, import sorting, docstring rules and formatting

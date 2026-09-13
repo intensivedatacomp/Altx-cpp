@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["pyyaml"]
+# ///
 """Delete the GHCR package versions that the image builds have superseded.
 
 **Single writer.** This runs once, at the end of ``docker-images.yml``, and

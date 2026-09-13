@@ -2,16 +2,45 @@
 
 Every script works from any directory inside the checkout, and prints its full usage with `--help`.
 
+The Python scripts declare their own requirements inline, in a PEP 723 `# /// script` block, so
+`uv run scripts/<name>.py` works with nothing installed. The block also stops uv from treating the
+repository's linter-only `pyproject.toml` as a project, which is what otherwise causes the warning
+`No requires-python value found in the workspace`.
+
 ### `scripts/count_lines.py` — the size of the code base
 
 ```bash
-scripts/count_lines.py               # banner, full commit hash, lines per language
-scripts/count_lines.py --files       # ... and the category every file was counted in
-scripts/count_lines.py --untracked   # include new files not yet added to git
+scripts/count_lines.py                           # banner, version, commit, lines per language
+scripts/count_lines.py --breakdown               # ... split into code, comment and blank lines
+scripts/count_lines.py --compare v0.0.2          # how many lines each language gained since a tag
+scripts/count_lines.py --by directory --depth 2  # a row per directory instead of per language
+scripts/count_lines.py --rev v0.0.1 --code-only  # an old commit, without checking it out
+scripts/count_lines.py src tests --largest 5     # only under src/ and tests/, plus the 5 longest files
+scripts/count_lines.py --format markdown         # a table to paste into a pull request
+scripts/count_lines.py --format json             # every number, for another tool
 ```
 
-Counts the files git tracks, as they are in the working tree, so build output and anything else
-in `.gitignore` stays out. The commit line notes when uncommitted changes are part of the count.
+The header shows the version exactly as the build stamps it. It uses
+`git describe --tags --dirty --always`, the command in `cmake/GitVersion.cmake`, so
+`v0.0.2-32-g6456b0b-dirty` means 32 commits after the tag `v0.0.2`, with uncommitted changes. The
+full commit hash is printed below it.
+
+| Option | Effect |
+| --- | --- |
+| `PATH ...` | Count only the files under these paths |
+| `--rev REV` | Count a commit, tag or branch as committed, instead of the working tree |
+| `--untracked` | Also count working-tree files that are neither tracked nor ignored |
+| `--code-only` | Leave out Documentation and Other |
+| `--by language\|directory`, `--depth N` | One row per language (the default), or per directory, keeping N directory levels |
+| `--breakdown` | Split every row into code, comment and blank lines |
+| `--compare REV` | Add a column with each row's change in lines since `REV` |
+| `--sort lines\|files\|name` | Row order; the default is most lines first |
+| `--largest N`, `--files` | Also list the N longest files, or every file, with its category |
+| `--format table\|markdown\|json`, `--no-banner` | Output format; only `table` prints the banner |
+
+By default it counts the files git tracks, as they are in the working tree, so build output and
+anything else in `.gitignore` stays out. The version line says when uncommitted changes are part
+of the count.
 
 | Category | What lands there |
 | --- | --- |
@@ -27,7 +56,12 @@ in `.gitignore` stays out. The commit line notes when uncommitted changes are pa
 
 *Of all* is a category's share of every line. *Of code* leaves out Documentation and Other, which
 together make up over 40 % of the lines, and `DevelopmentPlan.md` alone outweighs the C++ many
-times over. Needs only git and Python 3.
+times over.
+
+`--breakdown` sorts lines by each language's comment syntax: `#`, `//` and `/* */`, Vim's `"`,
+CMake's `#[[ ]]` and Python docstrings. A line with code followed by a comment counts as code.
+This is a line classifier, not a parser, so for example a `/*` inside a C++ string literal will
+fool it. The script needs only git and Python 3.12 or newer.
 
 ### `scripts/build_docker_images_locally.sh` — the images, built the way CI builds them
 
@@ -42,7 +76,7 @@ Builds the `base -> dev -> runtime` chain in order, with the same build argument
 They check the things that fail silently: BLAS resolving to the OpenMP build of OpenBLAS, clangd
 finding the library headers, Vim's `+clipboard`, the description labels, and the pre-commit hooks
 running offline. Needs Docker with buildx. See
-[docs/DevelopmentEnvironment.md](docs/DevelopmentEnvironment.md) for every option.
+[docs/DevelopmentEnvironment.md](../docs/DevelopmentEnvironment.md) for every option.
 
 ### `scripts/ci/coverage.sh` and `scripts/ci/coverage_badge.py` — coverage
 
@@ -67,8 +101,8 @@ python3 scripts/ci/images.py description dev-gpu     # the label text, disabled 
 ```
 
 Resolves `docker/images.yaml` into everything CI needs. Every image reference is a pure function of
-the working tree, so the result here is the one CI computes. Needs PyYAML; without it, run
-`uv run --no-project --with pyyaml scripts/ci/images.py plan`.
+the working tree, so the result here is the one CI computes. Needs PyYAML. Without it, run
+`uv run scripts/ci/images.py plan`, which installs PyYAML from the script's inline metadata.
 
 ### `scripts/ci/prune_packages.py` — GHCR retention
 
