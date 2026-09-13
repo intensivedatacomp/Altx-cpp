@@ -17,7 +17,7 @@ separately in @ref code_quality.
 | Image             | Contains                                                     | Status                |
 | ----------------- | ------------------------------------------------------------ | --------------------- |
 | `base-cpu`        | OpenBLAS (openmp build), LAPACKE, serial HDF5, libgomp        | built                 |
-| `dev-cpu`         | `base-cpu` + toolchain, Vim, clangd, gdb, Doxygen, uv, pre-commit | built             |
+| `dev-cpu`         | `base-cpu` + toolchain, Vim (with clipboard), clangd, gdb, Doxygen, uv, pre-commit | built |
 | `runtime-cpu`     | `base-cpu` + `altx-serial`, `altx-omp`                        | built                 |
 | `runtime-cpu-mpi` | + OpenMPI, parallel HDF5                                       | development stage 5   |
 | `dev-gpu`, `runtime-gpu` | + ROCm                                                  | development stage 6   |
@@ -67,6 +67,17 @@ docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revisi
 
 `latest` and `vX.Y.Z` are written only by a `v*` tag, and a pull request build writes no moving
 tag at all.
+
+Every image also describes itself in `org.opencontainers.image.description`, which is the text on
+its GHCR package page. The descriptions are the `description:` keys in `docker/images.yaml` —
+edit them there, not in a Dockerfile. Each one reaches its image as the `IMAGE_DESCRIPTION` build
+argument, because every Dockerfile builds more than one image. A description is part of the
+content hash, so rewording one republishes that image:
+
+```bash
+docker inspect --format '{{index .Config.Labels "org.opencontainers.image.description"}}' \
+    ghcr.io/intensivedatacomp/altx-cpp/dev-cpu:edge
+```
 
 After a successful build, a `prune` job deletes what that build superseded — untagged leftovers in
 the per-image packages, and hash/sha versions past the keep window in `buildcache`. Nothing tagged
@@ -376,6 +387,53 @@ CMake options and file paths. This needs `SHELL` to be exported in the environme
 `'shell'` from it, and bash sets the variable without exporting it, so a container missing
 `ENV SHELL=/bin/bash` would silently run `/bin/sh` (dash) here, with no completion at all.
 
+@subsection devenv_vim_clipboard System clipboard
+
+The image's Vim is `vim-gtk3`, which is built with `+clipboard`: the `+` register is the desktop
+clipboard and `*` is the X11 primary selection (the middle-click one). It still runs in the
+terminal. The X11 libraries are only there for the clipboard. The container needs the host's
+display to reach either register, so pass the X11 socket and `DISPLAY` in:
+
+```bash
+xhost +SI:localuser:"$(id -un)"      # on the host, once per login session
+docker run --rm -it -v "$PWD:/workspace" -w /workspace \
+    -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
+    ghcr.io/intensivedatacomp/altx-cpp/dev-cpu:edge
+```
+
+| Key         | What it does                                              |
+| ----------- | --------------------------------------------------------- |
+| `"+y`       | Yank to the clipboard — `"+yy` a line, `"+y` on a visual selection |
+| `"+p`       | Paste from the clipboard                                  |
+| `"*p`       | Paste the primary selection, i.e. whatever is highlighted on the host |
+
+To have plain `y` and `p` use the clipboard as well, run `:set clipboard=unnamedplus`. It is not
+the default, because it would also replace the clipboard on every `dd` and `x`. From the shell,
+including inside `:term`, `xclip` does the same: `git diff | xclip -selection clipboard`.
+
+**Why `xhost`.** The X server accepts only clients that present the login session's
+authorisation cookie, and the container does not have one. `SI:localuser:<you>` also admits any
+process running under your uid. That covers the container because its user shares your uid, as
+described in "Matching your host account" above. This is narrower than the `xhost +local:` that
+the docker-builder images document, which admits every local process of every user. If your uid
+is not the image's 1000, `SI:localuser` turns the container away. Rebuild with your uid instead of
+widening the rule. The permission lasts until you log out, and `xhost -SI:localuser:"$(id -un)"`
+revokes it sooner.
+
+On a Wayland desktop (GNOME, KDE) this works unchanged. The session runs XWayland, which provides
+both `DISPLAY` and `/tmp/.X11-unix`, and the compositor keeps the X11 and Wayland clipboards in sync.
+
+As with any X11 program, a selection is served by the process that made it. Something yanked with
+`"*y` can be pasted on the host only while that Vim is still running. Once Vim quits, the primary
+selection is gone. Whether a `"+y` outlives Vim depends on whether the desktop's clipboard manager
+keeps a copy.
+
+Without `-e DISPLAY` nothing changes except that `+` and `*` are ordinary registers local to the
+container. With `DISPLAY` but without the `xhost` step, Vim starts just as quickly but prints
+`Authorization required, but no authorization protocol specified`, and the registers again stay
+local. VS Code does not need any of this, because its editor runs on the host and uses the host
+clipboard directly.
+
 @subsection devenv_vim_general General settings
 
 Four-space indentation with `expandtab`; incremental, highlighted search that is case-insensitive
@@ -426,6 +484,9 @@ not commit that, since it does not exist on anyone else's machine.
 | A word added in VS Code still underlined in Vim       | The `.add.spl` is stale in an already-open session — `:SpellSync` |
 | `zg` reports it cannot write the word list            | Vim started outside the repository, so `spell/` was not found upwards |
 | VS Code's "Add to dictionary" offers only user settings | The cspell extension is not seeing `cspell.config.yaml` — check the folder it opened |
+| `"+y` works in Vim, but the host never sees it        | Container started without `-e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix` — see @ref devenv_vim_clipboard |
+| `Authorization required, but no authorization protocol specified` when Vim starts | `DISPLAY` is passed, but the host has not run `xhost +SI:localuser:"$(id -un)"`, or your uid is not the image's |
+| Text yanked in the container vanishes from the host when Vim quits | X11 selections are served by the process that made them |
 
 `:LspStatus` answers most editor questions directly, and `clangd --check=<file>` outside Vim shows
 exactly which flags clangd used and which includes it failed to resolve.

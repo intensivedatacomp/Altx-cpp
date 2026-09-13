@@ -45,3 +45,8 @@ COPY --from=builder /src/build/cpu-omp-release/apps/altx    /usr/local/bin/altx-
 RUN ldd /usr/local/bin/altx-omp > /tmp/ldd.txt \
     && ! grep -q "not found" /tmp/ldd.txt \
     && rm /tmp/ldd.txt
+
+# Last in the final stage, which would otherwise inherit base-cpu's
+# description. Why it is a build argument, and why here: base.Dockerfile.
+ARG IMAGE_DESCRIPTION
+LABEL org.opencontainers.image.description="${IMAGE_DESCRIPTION}"

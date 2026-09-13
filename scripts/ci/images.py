@@ -15,6 +15,8 @@ The hash of an image covers
   they need no separate handling;
 * every file matched by ``inputs``;
 * the static ``build_args``;
+* the ``description``, which becomes the image's
+  ``org.opencontainers.image.description`` label -- a label is image content;
 * the hash of every parent, recursively.
 
 Two destinations, not one
@@ -41,6 +43,7 @@ Commands
 ``plan``        the whole resolved matrix as JSON (what the CI prepare job runs)
 ``ref NAME``    the immutable ``hash-`` reference of one image
 ``build-args``  ``--build-arg`` flags for one image, ready to paste into docker
+``description NAME``  one image's description, disabled images included
 
 Run it anywhere: ``python3 scripts/ci/images.py plan``, or, if PyYAML is not
 installed, ``uv run --no-project --with pyyaml scripts/ci/images.py plan``.
@@ -55,6 +58,7 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -84,6 +88,11 @@ HASH_LENGTH = 12  # hex characters kept in the tag
 # 3 since runtime-cpu was enabled: base -> dev -> runtime. `emit_github_output`
 # checks the resolved depth against this and says which file to edit.
 MAX_TIERS = 3
+
+# The build argument every Dockerfile turns into its description label. It is a
+# build argument rather than a literal LABEL because each Dockerfile builds
+# several images; see the end of docker/base.Dockerfile.
+DESCRIPTION_ARG = "IMAGE_DESCRIPTION"
 
 # ``images.yaml`` is free-form nested YAML and ``resolve`` builds an equally
 # free-form record out of it, so the value type really is Any. Naming the two
@@ -172,6 +181,39 @@ def cache_repository(config: Config) -> str:
         The fully qualified buildcache package.
     """
     return f"{namespace(config)}/{config.get('buildcache_package', 'buildcache')}"
+
+
+def description(config: Config, name: str) -> str:
+    """Read the one-line description an image is labelled with.
+
+    Required for every image, so that no published package is left without a
+    description -- or, worse, with the one it inherited from its parent.
+
+    Parameters
+    ----------
+    config : Config
+        The parsed ``images.yaml``.
+    name : str
+        The image, enabled or not.
+
+    Returns
+    -------
+    str
+        The description, stripped. Exits if it is missing, empty or spans more
+        than one line.
+    """
+    spec = config["images"].get(name)
+    if spec is None:
+        sys.exit(f"unknown image '{name}'")
+    text = spec.get("description")
+    if not isinstance(text, str) or not text.strip():
+        sys.exit(f"'{name}' has no description in docker/images.yaml")
+    # Build arguments travel one KEY=VALUE per line -- in the plan and in the
+    # build action's `build-args` -- so a second line would arrive as a
+    # malformed argument of its own rather than as part of this one.
+    if "\n" in text.strip():
+        sys.exit(f"the description of '{name}' spans several lines; write it as `>-`")
+    return text.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +311,10 @@ def content_hash(root: Path, config: Config, name: str, cache: dict[str, str]) -
     for key, value in sorted(spec.get("build_args", {}).items()):
         digest.update(f"arg\0{key}\0{value}\0".encode())
 
+    # Without this a reworded description would never reach a published image:
+    # the hash would be unchanged, so the build would be skipped.
+    digest.update(f"description\0{description(config, name)}\0".encode())
+
     cache[name] = digest.hexdigest()[:HASH_LENGTH]
     return cache[name]
 
@@ -356,6 +402,12 @@ def resolve(root: Path, config: Config) -> Plan:
         # also the reason a `FROM` in a Dockerfile must never be the only way
         # the parent is named -- CI always passes it explicitly.
         build_args = dict(spec.get("build_args", {}))
+        if DESCRIPTION_ARG in build_args:
+            sys.exit(
+                f"'{name}' sets {DESCRIPTION_ARG} under build_args; "
+                "use the `description` key instead"
+            )
+        build_args[DESCRIPTION_ARG] = description(config, name)
         for arg, parent in spec.get("parents", {}).items():
             parent_hash = content_hash(root, config, parent, cache)
             build_args[arg] = f"{cache_repo}:{parent}-hash-{parent_hash}"
@@ -454,9 +506,20 @@ def main() -> None:
     args_parser = sub.add_parser("build-args", help="print docker --build-arg flags")
     args_parser.add_argument("image")
 
+    desc_parser = sub.add_parser("description", help="print one image's description")
+    desc_parser.add_argument("image")
+
     args = parser.parse_args()
     root = repo_root()
-    plan = resolve(root, load_config(root))
+    config = load_config(root)
+
+    # Before resolving: this reads one key, and serves disabled images too --
+    # scripts/build_docker_images_locally.sh --flavor gpu builds those.
+    if args.command == "description":
+        print(description(config, args.image))
+        return
+
+    plan = resolve(root, config)
 
     if args.command == "plan":
         print(json.dumps(plan, indent=2))
@@ -474,9 +537,11 @@ def main() -> None:
     if args.command == "ref":
         print(image["ref"])
     elif args.command == "build-args":
+        # Quoted: the description is a sentence, and unquoted its words would
+        # each become an argument to docker.
         print(
             " ".join(
-                f"--build-arg {line}"
+                f"--build-arg {shlex.quote(line)}"
                 for line in image["build_args"].splitlines()
                 if line
             )

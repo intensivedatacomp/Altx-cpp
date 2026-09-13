@@ -176,17 +176,41 @@ build() {
     ok "${image}  ($(docker images --format '{{.Size}}' --filter "reference=${image}" | head -1))"
 }
 
-build base.Dockerfile "${BASE_IMG}" --build-arg "FLAVOR=${FLAVOR}"
+# Each image's org.opencontainers.image.description label. The text lives in
+# docker/images.yaml and is read through scripts/ci/images.py, the same path CI
+# takes, so a local image and a published one cannot be described differently.
+# images.py needs PyYAML: the system interpreter is tried first, then uv. Not
+# having either is no reason to fail a build -- the label is left empty, this
+# says so, and the smoke test skips the check.
+describe() {
+    local images_py="${REPO_ROOT}/scripts/ci/images.py"
+    python3 "$images_py" description "$1" 2>/dev/null && return
+    if command -v uv >/dev/null 2>&1; then
+        uv run --quiet --no-project --with pyyaml "$images_py" description "$1" 2>/dev/null \
+            && return
+    fi
+    # To stderr: stdout is the description being captured.
+    warn "no description for $1 -- images.py needs PyYAML or uv; the label will be empty" >&2
+}
+
+BASE_DESC=$(describe "base-${FLAVOR}")
+DEV_DESC=$(describe "dev-${FLAVOR}")
+RUNTIME_DESC=$(describe "runtime-${FLAVOR}")
+
+build base.Dockerfile "${BASE_IMG}" --build-arg "FLAVOR=${FLAVOR}" \
+    --build-arg "IMAGE_DESCRIPTION=${BASE_DESC}"
 
 if [[ "$TARGET" != base ]]; then
-    build dev.Dockerfile "${DEV_IMG}" --build-arg "BASE_IMAGE=${BASE_IMG}"
+    build dev.Dockerfile "${DEV_IMG}" --build-arg "BASE_IMAGE=${BASE_IMG}" \
+        --build-arg "IMAGE_DESCRIPTION=${DEV_DESC}"
 fi
 
 if [[ "$TARGET" == runtime || "$TARGET" == all ]]; then
     if [[ -f "${REPO_ROOT}/CMakeLists.txt" ]]; then
         build runtime.Dockerfile "${RUNTIME_IMG}" \
             --build-arg "DEV_IMAGE=${DEV_IMG}" \
-            --build-arg "BASE_IMAGE=${BASE_IMG}"
+            --build-arg "BASE_IMAGE=${BASE_IMG}" \
+            --build-arg "IMAGE_DESCRIPTION=${RUNTIME_DESC}"
     else
         warn "no CMakeLists.txt yet -- skipping ${RUNTIME_IMG} (nothing to compile or copy)"
         TARGET=dev
@@ -203,8 +227,26 @@ fi
 
 in_image() { docker run --rm --entrypoint /bin/bash "$1" -lc "$2"; }
 
+# The label is set by the last instruction of each Dockerfile, from a build
+# argument. Labels are inherited, so a Dockerfile that loses its ARG, or gains a
+# stage after the LABEL, still builds -- and quietly carries its parent's
+# description, or none.
+check_description() {
+    local image="$1" expected="$2" actual
+    actual=$(docker inspect \
+        --format '{{index .Config.Labels "org.opencontainers.image.description"}}' "$image")
+    if [[ -z "$expected" ]]; then
+        warn "description label not checked: none could be read from docker/images.yaml"
+    elif [[ "$actual" == "$expected" ]]; then
+        ok "description: ${actual:0:72}..."
+    else
+        die "${image} is described as '${actual}', not as in docker/images.yaml"
+    fi
+}
+
 smoke_base() {
     step "Smoke: ${BASE_IMG}"
+    check_description "${BASE_IMG}" "${BASE_DESC}"
 
     # Plan, 'Threading: parallelism at one level only': the pthread build of
     # OpenBLAS degrades or deadlocks when called from an OpenMP region, and it
@@ -230,6 +272,22 @@ smoke_base() {
 
 smoke_dev() {
     step "Smoke: ${DEV_IMG}"
+    check_description "${DEV_IMG}" "${DEV_DESC}"
+
+    # vim-gtk3 is installed for +clipboard alone, and the Vim packages without
+    # it -- vim-nox, vim -- install and run just as well. The version loop below
+    # would pass on a regression to either, so check the feature, not the
+    # binary. `[+]` so that neither `-clipboard` nor `+xterm_clipboard` matches.
+    if in_image "${DEV_IMG}" "vim --version | grep -q '[+]clipboard'"; then
+        ok "vim: +clipboard"
+    else
+        die "vim in ${DEV_IMG} is built without +clipboard -- is it still vim-gtk3?"
+    fi
+    if in_image "${DEV_IMG}" "command -v xclip >/dev/null"; then
+        ok "xclip present"
+    else
+        die "xclip missing from ${DEV_IMG}"
+    fi
 
     for tool in g++ cmake ninja gdb git vim clangd clang-format doxygen uv python python3; do
         local version
@@ -246,7 +304,7 @@ smoke_dev() {
     done
 
     # `python` and `python3` must be the uv-managed interpreter, not Ubuntu's
-    # python3.12 -- which is present only because vim-nox depends on it, and
+    # python3.12 -- which is present only because Vim depends on it, and
     # which would otherwise win whenever the uv shims failed to install. Both
     # names are checked: `python` is the one Ubuntu does not provide at all, so
     # it is the one that silently goes missing.
@@ -375,6 +433,7 @@ smoke_precommit() {
 
 smoke_runtime() {
     step "Smoke: ${RUNTIME_IMG}"
+    check_description "${RUNTIME_IMG}" "${RUNTIME_DESC}"
 
     for binary in altx-serial altx-omp; do
         in_image "${RUNTIME_IMG}" "command -v ${binary} >/dev/null" \

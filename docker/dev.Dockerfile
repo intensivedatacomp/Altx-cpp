@@ -75,8 +75,24 @@ RUN echo "apt snapshot ${APT_SNAPSHOT}" && \
 # GCC's include directory, where the image's only omp.h otherwise lives. Without
 # it every <omp.h> and every omp_* symbol is an error in the editor, while the
 # GCC build succeeds -- the most confusing failure mode available.
+#
+# vim-gtk3 rather than vim-nox, for the system clipboard, and the same choice
+# the docker-builder images make. It is Ubuntu's only terminal Vim built with
+# +clipboard: vim-nox has no X11 support at all, so "+y would silently yank into
+# a register nothing outside the container can read. Nothing graphical runs --
+# `vim` is still the terminal editor, and the GTK libraries are there only
+# because the X11 clipboard code is linked into the same binary as gvim. It
+# costs about 125 extra packages; the Trivy gate is what says whether they
+# carry anything.
+#
+# The clipboard needs the host's X server, handed in at run time with
+# `-e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix` -- see "System clipboard" in
+# docs/DevelopmentEnvironment.md. Without DISPLAY Vim works as before and the +
+# and * registers are simply container-local. xclip is the same clipboard for
+# the shell: `git diff | xclip -selection clipboard`.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    vim-nox \
+    vim-gtk3 \
+    xclip \
     clangd-18 \
     clang-format-18 \
     clang-tidy-18 \
@@ -247,7 +263,7 @@ WORKDIR /workspace
 # where it is under /usr/bin; nothing is replaced, `${HOME}/.local/bin` simply
 # comes first on PATH. `python` in particular does not otherwise exist here at
 # all: Ubuntu ships no unversioned alias, and the 3.12 present at all is an
-# accident of vim-nox depending on it.
+# accident of Vim (vim-gtk3, formerly vim-nox) depending on it.
 #
 # **This step must stay after the pre-commit layer.** `uv tool install` resolves
 # the *default* interpreter, so installing 3.14 first would build pre-commit's
@@ -297,3 +313,8 @@ WORKDIR /workspace
 
 # Set initial command
 ENTRYPOINT ["/bin/bash"]
+
+# Last, or this image would carry base-cpu's description. Why it is a build
+# argument, and why here: base.Dockerfile.
+ARG IMAGE_DESCRIPTION
+LABEL org.opencontainers.image.description="${IMAGE_DESCRIPTION}"
