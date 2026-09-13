@@ -25,7 +25,46 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main, master]
+
+  # The refresh run, and the reason the apt snapshot date in the Dockerfiles is
+  # no longer something a person maintains.
+  #
+  # Two independent mechanisms conspire to freeze an image's package set, and
+  # both have to be defeated to unfreeze it:
+  #
+  #   1. this workflow skips a build whose content hash already exists, which
+  #      is right -- an unchanged tree should not produce a new image;
+  #   2. buildx reuses the apt layer, whose cache key is its own instruction
+  #      text plus the parent image, neither of which changes when a security
+  #      update lands in the archive.
+  #
+  # So an image that nobody edits keeps the packages it had on the day its
+  # layer was first built, however often CI runs. The scan still runs every
+  # time (an unchanged image still acquires CVEs), which is how the gap shows
+  # up: findings accumulate against an image no event can rebuild.
+  #
+  # A weekly run with `force_rebuild` set does both -- skips the existence
+  # check and passes a fresh APT_SNAPSHOT -- so `apt-get upgrade` resolves
+  # against today's archive.
+  #
+  # Saturday morning, Central European time: a forced run rebuilds every image
+  # from the apt layer down, which is the most expensive thing this repository
+  # asks of CI, and at the weekend it competes with nobody's pull request. The
+  # week then starts with images that are already refreshed and already
+  # scanned.
+  #
+  # Cron here is UTC and does not follow daylight saving, so 04:00 UTC is 06:00
+  # CEST in summer and 05:00 CET in winter. Both are Saturday morning, which is
+  # all this needs to be.
+  schedule:
+    - cron: '0 4 * * 6'
+
   workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: Rebuild even when the content hash exists, refreshing apt.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -45,6 +84,7 @@ jobs:
       tier1:     ${{ steps.plan.outputs.tier1 }}
       tier2:     ${{ steps.plan.outputs.tier2 }}
       push:      ${{ steps.mode.outputs.push }}
+      force:     ${{ steps.mode.outputs.force }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -57,6 +97,10 @@ jobs:
         run: |
           # A fork PR's GITHUB_TOKEN is downgraded to packages:read.
           echo "push=${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}" >> "$GITHUB_OUTPUT"
+          # The weekly schedule always refreshes; a manual run asks. Nothing
+          # else does, so an ordinary push still gets the cheap behaviour of
+          # skipping images whose content has not changed.
+          echo "force=${{ github.event_name == 'schedule' || inputs.force_rebuild == true }}" >> "$GITHUB_OUTPUT"
 
   tier0:
     needs: prepare
@@ -77,6 +121,7 @@ jobs:
         with:
           image: ${{ toJson(matrix.image) }}
           push:  ${{ needs.prepare.outputs.push }}
+          force: ${{ needs.prepare.outputs.force }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
   tier1:
@@ -100,6 +145,7 @@ jobs:
         with:
           image: ${{ toJson(matrix.image) }}
           push:  ${{ needs.prepare.outputs.push }}
+          force: ${{ needs.prepare.outputs.force }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
   # The runtime images. One tier deeper than dev because they are multi-stage:
@@ -131,6 +177,7 @@ jobs:
         with:
           image: ${{ toJson(matrix.image) }}
           push:  ${{ needs.prepare.outputs.push }}
+          force: ${{ needs.prepare.outputs.force }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
   # Deletes what this build superseded: previous `edge` manifests, now

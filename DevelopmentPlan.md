@@ -894,13 +894,87 @@ development images included.
 > start failing every pull request, including ones that touch no Dockerfile. The remedy is a
 > rebuild, and a rebuild only happens when the content hash changes -- so it takes an edit to the
 > Dockerfile. `apt-get upgrade` is what makes that edit *sufficient*; before it, rebuilding
-> refreshed only the packages the Dockerfile names. The remaining gap is that nothing rebuilds on a
-> schedule, which is `nightly.yml`'s job when it arrives.
+> refreshed only the packages the Dockerfile names.
+>
+> **The remaining gap -- that nothing rebuilds on a schedule -- is closed**, and not by
+> `nightly.yml`: see [Refreshing the package set](#refreshing-the-package-set-without-a-human-in-the-loop)
+> below. It belongs in `docker-images.yml` because that workflow already knows how to build, tag,
+> publish, scan and prune an image; a second workflow would be a second copy of all of it.
 >
 > What this does **not** change: VTune. It stays behind `ARG WITH_VTUNE=0`, and if the 2--3 GB
 > Intel layer does turn out to carry an irreducible backlog, the per-image `trivy:` override in
 > `docker/images.yaml` is still there -- the mechanism was never removed, only its default
 > flipped.
+
+#### The Security tab is the quiet half of the same signal
+
+The gate is CRITICAL and HIGH, while the SARIF upload deliberately carries **every** severity, so
+MEDIUM findings appear as code-scanning alerts and fail nothing. They are not decoration either,
+because the scan runs with `ignore-unfixed: true`: a MEDIUM alert against an apt package means a
+fix exists in the archive and the image does not have it. That is the same fact the gate would
+shout, arriving quietly, and it gets the same one-line answer -- bump `ARG APT_SNAPSHOT` in the
+Dockerfile, which invalidates the apt layer, makes `apt-get upgrade` mean something again, and
+changes the content hash so CI rebuilds rather than re-scanning the published image.
+
+Worked example, 2026-09-13: 34 alerts, all MEDIUM, all from two packages -- `libc6` and friends at
+`2.39-0ubuntu8.8` against `8.9`, and Ubuntu's `python3.12` (present only because `vim-nox` depends
+on it) at `3.12.3-1ubuntu0.16` against `0.17`. The count is inflated by the structure rather than
+by the problem: one alert per CVE per *package name* for the same source package, times one
+code-scanning category per image, and `runtime-cpu` joining the matrix added a third category
+reporting `base-cpu`'s own findings again. Bumping the date cleared all of them, and the alerts
+close themselves when the next scan of that category no longer reports them.
+
+The conclusion to carry: **read the alert count as "how stale are the base layers", not as a list
+of things to fix one by one.** Nothing in `.trivyignore` was needed, and nothing should be added
+for a finding that a rebuild fixes.
+
+#### Refreshing the package set without a human in the loop
+
+Bumping a date by hand in response to an alert is a process that works exactly as long as someone
+is watching, which is the property that makes it the wrong mechanism. Two things freeze an image's
+package set, and an automatic refresh has to defeat **both**:
+
+1. the workflow skips a build whose content hash already exists -- correct, an unchanged tree
+   should not produce a new image;
+2. buildx reuses the apt layer, whose cache key is its instruction text plus the parent image, and
+   neither changes when a security update lands in the archive.
+
+`docker-images.yml` therefore runs **weekly**, on Saturday morning Central European time
+(`0 4 * * 6`; cron is UTC and ignores daylight saving, so 06:00 CEST or 05:00 CET). A forced run
+rebuilds every image from the apt layer down, which is the most expensive thing this repository
+asks of CI, and at the weekend it competes with nobody's pull request. On that run -- or a manual
+one with `force_rebuild` -- the build-image action skips the existence check *and* passes
+`--build-arg APT_SNAPSHOT=<today>` to every image whose Dockerfile declares it. The first makes
+buildx run; the second is what actually refreshes anything. Everything downstream is unchanged, so
+the refreshed image is tagged, scanned, gated and pruned exactly as a normal build, and stale
+alerts close themselves when the next scan of that category stops reporting them.
+
+The date literal stays in the Dockerfiles, with a smaller job: it is a **floor** ("at least this
+fresh"), and editing it is how a *specific tree* forces the refresh, since only that changes the
+content hash and rebuilds every descendant immediately. The routine case no longer needs it.
+
+What this concedes, stated rather than hidden: an image published under `hash-<digest>` may then
+contain a package set that a local `docker build` of that tree would not reproduce. That is not a
+new concession -- Ubuntu keeps one version per package, which is why `DL3008` is silenced and why
+the versions were never pinned -- so the hash has always named the **inputs**, not the bytes.
+Reproducing a particular CI run still works: that is what the `-sha-` tags are for, and they stay
+on the manifest they were written against.
+
+Three alternatives, and why not:
+
+- **Pin package versions and let a bot bump them.** Rejected already, under
+  [Build structure](#build-structure): Ubuntu's archive keeps one version per package, so a pin
+  starts failing the moment a security update lands.
+- **A scheduled job that edits the date and opens a pull request.** It keeps the hash honest, and
+  it does not work here: a push or pull request made with `GITHUB_TOKEN` triggers no workflows, so
+  the one change whose entire purpose is to rebuild the images would arrive with no image build to
+  review. A personal access token would fix that by taking the guard off, which is a poor trade for
+  a cosmetic gain.
+- **A content-addressed cache buster** -- `ADD` of a URL whose checksum changes when the archive
+  moves, such as the `noble-security` `Release` file -- so a forced rebuild is a full cache hit in
+  the weeks when nothing changed. It is the better mechanism if the weekly rebuild ever costs too
+  much CI time, at the price of a build that fails when a URL moves. Worth revisiting when the GPU
+  images, which are far more expensive to rebuild, join the matrix.
 
 Size expectation: `runtime-cpu` in the low hundreds of MB, `runtime-gpu` several GB. The ROCm
 layer dominates and is reduced by installing the ROCm *runtime* rather than the full SDK in the
@@ -1138,8 +1212,8 @@ only one source.
 | Workflow            | Trigger                                            | Does                                                    |
 | ------------------- | -------------------------------------------------- | ------------------------------------------------------- |
 | `pre-commit.yml`    | push to **any** branch, pull request, manual       | the same hooks as the local pre-commit                   |
-| `docker-images.yml` | push to `main` / `**docker**` / `v*`, PR, manual   | build the image matrix if the content hash is absent; push and Trivy-scan |
-| `build-test.yml`    | pull request, push to `main`                       | the preset matrix: configure, build, `ctest`             |
+| `docker-images.yml` | push to `main` / `**docker**` / `v*`, PR, manual, **weekly** | build the image matrix if the content hash is absent; push and Trivy-scan. The weekly run rebuilds regardless and refreshes apt |
+| `build-test.yml`    | push to **any** branch, pull request, manual       | the preset matrix: configure, build, `ctest`, coverage   |
 | `nightly.yml`       | schedule                                           | sanitizers, GPU build, Trivy, benchmarks                 |
 | `release.yml`       | push of git tag `v*`                               | rebuild all, version tags, Trivy gating, GitHub release  |
 | `docs.yml`          | push to `main`, git tag                            | Doxygen to GitHub Pages                                  |
@@ -1163,9 +1237,20 @@ Three decisions inside `build-test.yml` that the table does not show:
   to express one cache variable, and two preset families that drift apart. One flag in one
   workflow step keeps the preset a developer runs and the preset CI runs literally the same
   object.
-- **Coverage runs on pull requests too**, though only a push to `main` commits the badge. The plan
-  scheduled it for merges only; it costs about a minute and the number is most useful while the
-  change that moved it is still open.
+- **Coverage runs on every push and pull request**, though only a push to `main` commits the badge.
+  The plan scheduled it for merges only; it costs about a minute and the number is most useful
+  while the change that moved it is still open.
+- **The preset matrix is chosen from the ref, not from the event.** `main` and a manually
+  dispatched run get all four CPU presets; everything else -- a branch push, a pull request -- gets
+  the fast pair. Testing `github.ref` rather than `github.event_name` is what makes that one rule
+  instead of two: a pull request's ref is `refs/pull/N/merge`, so it falls on the right side
+  without a second condition.
+- **`defaults.run.shell: bash`, stated rather than inferred.** The documented default is `bash -e`
+  with a fallback to `sh`, and in a container job the fallback is what happens even though
+  `dev-cpu` has bash at `/usr/bin/bash` and on `PATH`. The symptom is remote from the cause --
+  `set: Illegal option -o pipefail`, from dash, on a line that has nothing to do with the step's
+  purpose -- and it cost one red run on `main`. Every `run` here uses `set -o pipefail`, `${VAR,,}`
+  or `[[ ]]`, so none of them is portable to `sh` by accident.
 
 ### Coverage
 
@@ -1262,12 +1347,20 @@ result depends on which commit `edge` happens to name. Two limits keep it from s
 The constraint is that a pull request must stay fast enough to be useful, while a merge to `main`
 can afford breadth.
 
-**Per pull request (target: under ten minutes)**
+**Per push to any branch, and per pull request (target: under ten minutes)**
 
 - `cpu-omp-release`: build and full `ctest`. This is the primary configuration.
 - `cpu-serial-debug` with ASan and UBSan: build and full `ctest`. Cheap, and it catches undefined
   behaviour that the release build hides.
+- Coverage, for the number in the job summary. The badge is only written from `main`.
 - `pre-commit`.
+
+The original rule here was "per pull request". It is **per push**, on the same reasoning
+`pre-commit.yml` already applies to linting: the value of a check is in how early it arrives, and
+learning that a branch does not compile when the pull request is opened is exactly the delay worth
+removing. The branch and the pull request therefore build the same pair twice, which is accepted
+rather than deduplicated for the reason recorded there -- `push` tests the branch as written,
+`pull_request` tests its merge into the base, and those are different trees.
 
 **Per merge to `main`**
 

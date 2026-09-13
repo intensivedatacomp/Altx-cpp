@@ -10,7 +10,16 @@ name: Build and test
 # name from the same tree.
 on:
   push:
-    branches: [main]
+    # Every branch, for the reason pre-commit.yml gives for the same rule: the
+    # value of a check is in how early it arrives, and waiting for a pull
+    # request to be opened before finding out that a branch does not compile is
+    # the delay this exists to remove. `'**'` matches names containing `/`, so
+    # `feature/x` counts; tags are excluded, since a tag names a commit that was
+    # already built as a branch.
+    #
+    # What a push gets is not what `main` gets -- see the `presets` step. A
+    # branch gets the fast pair, so iterating stays under a few minutes.
+    branches: ['**']
     # The coverage job commits a badge to `main`. Without this, that commit
     # starts another run of this workflow, which produces the same badge.
     paths-ignore: ['.badges/**']
@@ -21,6 +30,21 @@ on:
 permissions:
   contents: read
   packages: read
+
+# Every `run` step, in every job here, is bash.
+#
+# The documented default is `bash -e {0}` with a fallback to `sh`, and inside a
+# container job the fallback is what happens -- dev-cpu has bash at
+# /usr/bin/bash and on PATH, and the runner reached for /bin/sh anyway, which
+# on Ubuntu is dash. The symptom is remote from the cause:
+#
+#     /__w/_temp/….sh: 1: set: Illegal option -o pipefail
+#
+# Nothing here is POSIX-only -- `set -o pipefail`, `${VAR,,}` and `[[ ]]` all
+# need bash -- so the shell is named rather than inferred.
+defaults:
+  run:
+    shell: bash
 
 # `head_ref` for a pull request, `ref_name` for a push, and the event in the
 # key: a push to a branch with an open pull request runs both, and the two check
@@ -72,26 +96,33 @@ jobs:
             echo "::warning title=Development image not published yet::$ref does not exist; falling back to $fallback. The build below does not match this tree's dev image."
           fi
 
-      # A pull request has ten minutes to be useful, so it gets the two presets
-      # that disagree most: the primary release configuration, and a serial
-      # debug build with ASan and UBSan, which catches the undefined behaviour
-      # the optimiser hides. A merge to `main` affords all four.
+      # Work in progress -- a branch push or a pull request -- has ten minutes
+      # to be useful, so it gets the two presets that disagree most: the
+      # primary release configuration, and a serial debug build with ASan and
+      # UBSan, which catches the undefined behaviour the optimiser hides. Only
+      # `main` and an explicitly requested run afford all four; breadth is what
+      # a merge is for.
       - id: presets
+        env:
+          # `github.ref` is refs/pull/N/merge on a pull request, so this is
+          # false there without a second test for the event.
+          IS_MAIN: ${{ github.ref == 'refs/heads/main' }}
+          IS_MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == pull_request ]]; then
-            echo 'list=["cpu-omp-release","cpu-serial-debug"]' >> "$GITHUB_OUTPUT"
-          else
+          if [[ "$IS_MAIN" == true || "$IS_MANUAL" == true ]]; then
             echo 'list=["cpu-serial-debug","cpu-omp-debug","cpu-serial-release","cpu-omp-release"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'list=["cpu-omp-release","cpu-serial-debug"]' >> "$GITHUB_OUTPUT"
           fi
 
   build-test:
     needs: prepare
     runs-on: ubuntu-latest
-    # A pull request from a fork cannot pull a private package, so this job
-    # will fail there rather than silently testing nothing. That is the same
-    # trade `docker-images.yml` makes with its SARIF upload, and it changes the
-    # day the packages become public.
+    # The packages are public, so a fork's pull request can pull this image and
+    # the credentials below are not what makes it work -- they raise the
+    # anonymous pull limit and would keep the job working if the packages were
+    # ever made private again.
     container:
       image: ${{ needs.prepare.outputs.image }}
       credentials:
@@ -195,6 +226,10 @@ jobs:
       # README renders from the repository itself -- the pattern the Python
       # implementation already uses. `paths-ignore` at the top of this file is
       # what keeps this commit from triggering another run.
+      #
+      # `main` is protected and this push is permitted through it. If that ever
+      # changes, this step is where it shows, and the alternative is a badge
+      # committed to a branch rather than a softer failure here.
       #
       # Guarded on the repository name as well as the event: a fork whose
       # owner pushes to their own `main` should not have a workflow of ours

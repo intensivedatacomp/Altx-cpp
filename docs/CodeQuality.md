@@ -282,10 +282,15 @@ rather than only the news that something was wrong.
 @subsection quality_ci_build The build and test job
 
 `.github/workflows/build-test.yml` is the other half: it configures, builds and `ctest`s the preset
-matrix **inside `dev-cpu`**, at the content hash resolved from the working tree. A pull request
-gets `cpu-omp-release` and `cpu-serial-debug` (ASan and UBSan); a merge to `main` gets all four CPU
-presets. `-DALTX_WERROR=ON` is added on the configure line — the single difference between what CI
-builds and what you build — and `ctest` excludes the `slow` and `gpu` labels.
+matrix **inside `dev-cpu`**, at the content hash resolved from the working tree. It runs on **every
+push, on every branch**, and on every pull request, for the same reason the hook job does — a
+branch that does not compile should say so before a pull request is opened.
+
+What runs depends on the ref rather than on the event: a branch push or a pull request gets
+`cpu-omp-release` and `cpu-serial-debug` (ASan and UBSan), while `main` and a manually dispatched
+run get all four CPU presets. `-DALTX_WERROR=ON` is added on the configure line — the single
+difference between what CI builds and what you build — and `ctest` excludes the `slow` and `gpu`
+labels.
 
 @note Unlike the hook job above, this one *must* run in the image: `runtime-cpu` is compiled inside
 `dev-cpu`, so building anywhere else would test a toolchain nothing ships with.
