@@ -23,7 +23,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 # APT_SNAPSHOT is what makes that upgrade mean anything. Bump the date to force
 # a package refresh; see docker/dev.Dockerfile, where the same argument is
 # spelled out at length and where the failure that motivated it happened.
-ARG APT_SNAPSHOT=2026-09-07
+#
+# 2026-09-13: libc6 and libc-bin were pinned at 2.39-0ubuntu8.8 while the
+# archive had 8.9, which is six fixed glibc advisories the images were carrying
+# for no reason. They are MEDIUM, so the CRITICAL/HIGH gate never fired -- the
+# signal came from the Security tab, where the SARIF upload deliberately
+# reports every severity. That is the same feedback loop one step quieter, and
+# it gets the same answer.
+ARG APT_SNAPSHOT=2026-09-13
 RUN echo "apt snapshot ${APT_SNAPSHOT}" && \
     apt-get update && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends \

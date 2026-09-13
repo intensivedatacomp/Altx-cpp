@@ -22,6 +22,21 @@ permissions:
   contents: read
   packages: read
 
+# Every `run` step, in every job here, is bash.
+#
+# The documented default is `bash -e {0}` with a fallback to `sh`, and inside a
+# container job the fallback is what happens -- dev-cpu has bash at
+# /usr/bin/bash and on PATH, and the runner reached for /bin/sh anyway, which
+# on Ubuntu is dash. The symptom is remote from the cause:
+#
+#     /__w/_temp/….sh: 1: set: Illegal option -o pipefail
+#
+# Nothing here is POSIX-only -- `set -o pipefail`, `${VAR,,}` and `[[ ]]` all
+# need bash -- so the shell is named rather than inferred.
+defaults:
+  run:
+    shell: bash
+
 # `head_ref` for a pull request, `ref_name` for a push, and the event in the
 # key: a push to a branch with an open pull request runs both, and the two check
 # different trees -- the branch as written, and its merge into the base.

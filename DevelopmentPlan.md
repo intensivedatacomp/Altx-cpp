@@ -902,6 +902,28 @@ development images included.
 > `docker/images.yaml` is still there -- the mechanism was never removed, only its default
 > flipped.
 
+#### The Security tab is the quiet half of the same signal
+
+The gate is CRITICAL and HIGH, while the SARIF upload deliberately carries **every** severity, so
+MEDIUM findings appear as code-scanning alerts and fail nothing. They are not decoration either,
+because the scan runs with `ignore-unfixed: true`: a MEDIUM alert against an apt package means a
+fix exists in the archive and the image does not have it. That is the same fact the gate would
+shout, arriving quietly, and it gets the same one-line answer -- bump `ARG APT_SNAPSHOT` in the
+Dockerfile, which invalidates the apt layer, makes `apt-get upgrade` mean something again, and
+changes the content hash so CI rebuilds rather than re-scanning the published image.
+
+Worked example, 2026-09-13: 34 alerts, all MEDIUM, all from two packages -- `libc6` and friends at
+`2.39-0ubuntu8.8` against `8.9`, and Ubuntu's `python3.12` (present only because `vim-nox` depends
+on it) at `3.12.3-1ubuntu0.16` against `0.17`. The count is inflated by the structure rather than
+by the problem: one alert per CVE per *package name* for the same source package, times one
+code-scanning category per image, and `runtime-cpu` joining the matrix added a third category
+reporting `base-cpu`'s own findings again. Bumping the date cleared all of them, and the alerts
+close themselves when the next scan of that category no longer reports them.
+
+The conclusion to carry: **read the alert count as "how stale are the base layers", not as a list
+of things to fix one by one.** Nothing in `.trivyignore` was needed, and nothing should be added
+for a finding that a rebuild fixes.
+
 Size expectation: `runtime-cpu` in the low hundreds of MB, `runtime-gpu` several GB. The ROCm
 layer dominates and is reduced by installing the ROCm *runtime* rather than the full SDK in the
 runtime image -- the SDK belongs only in `dev-gpu`.
@@ -1166,6 +1188,12 @@ Three decisions inside `build-test.yml` that the table does not show:
 - **Coverage runs on pull requests too**, though only a push to `main` commits the badge. The plan
   scheduled it for merges only; it costs about a minute and the number is most useful while the
   change that moved it is still open.
+- **`defaults.run.shell: bash`, stated rather than inferred.** The documented default is `bash -e`
+  with a fallback to `sh`, and in a container job the fallback is what happens even though
+  `dev-cpu` has bash at `/usr/bin/bash` and on `PATH`. The symptom is remote from the cause --
+  `set: Illegal option -o pipefail`, from dash, on a line that has nothing to do with the step's
+  purpose -- and it cost one red run on `main`. Every `run` here uses `set -o pipefail`, `${VAR,,}`
+  or `[[ ]]`, so none of them is portable to `sh` by accident.
 
 ### Coverage
 

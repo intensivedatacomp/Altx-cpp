@@ -30,13 +30,22 @@ ENV DEBIAN_FRONTEND=noninteractive
 # the bump also changes the image's content hash, so CI rebuilds rather than
 # reusing the published image and re-scanning it.
 #
-# **Bump it when the Trivy gate reports a fixed vulnerability in a system
-# package.** That is the feedback loop this argument exists to close: the gate
-# says the archive is ahead of the image, and this is the one-line answer.
+# **Bump it when Trivy reports a fixed vulnerability in a system package.**
+# That is the feedback loop this argument exists to close: the scanner says the
+# archive is ahead of the image, and this is the one-line answer. The gate
+# (CRITICAL/HIGH) is the loud half of that signal; the Security tab carries the
+# rest, because the SARIF upload reports every severity on purpose. A MEDIUM
+# finding with a fixed version is the same fact arriving quietly.
+#
 # Passing `--build-arg APT_SNAPSHOT=...` forces a refresh without editing the
 # file, but then the build no longer matches its content hash -- the default
 # here is the source of truth.
-ARG APT_SNAPSHOT=2026-09-07
+#
+# 2026-09-13: libc6/libc-bin at 2.39-0ubuntu8.8 against 8.9 in the archive (six
+# glibc advisories), and Ubuntu's python3.12 -- present only because vim-nox
+# depends on it -- at 3.12.3-1ubuntu0.16 against 0.17 (two more). All eight
+# MEDIUM, all fixed upstream, none of them ours to patch.
+ARG APT_SNAPSHOT=2026-09-13
 RUN echo "apt snapshot ${APT_SNAPSHOT}" && \
     apt-get update && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends \
