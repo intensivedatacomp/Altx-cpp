@@ -1,0 +1,17 @@
+# Points clangd at one build directory, so that it reads the real compile
+# flags -- include paths, -std, -fopenmp, the generated core/Version.hpp --
+# instead of guessing them. Every preset sets CMAKE_EXPORT_COMPILE_COMMANDS,
+# so any of them would do; cpu-omp-debug is named because it is the one the
+# development images are meant to be used with.
+#
+# The user-level fallback in docker/vim/clangd-config.yaml stays where it is:
+# it applies when this database does not exist yet, which is the state of a
+# fresh clone before the first configure.
+CompileFlags:
+  CompilationDatabase: build/cpu-omp-debug
+
+Index:
+  Background: Build
+
+Diagnostics:
+  UnusedIncludes: Strict

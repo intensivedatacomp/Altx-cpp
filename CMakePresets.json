@@ -1,0 +1,152 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 25,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+            }
+        },
+        {
+            "name": "cpu",
+            "hidden": true,
+            "inherits": "base",
+            "cacheVariables": {
+                "ALTX_ENABLE_MPI": "OFF",
+                "ALTX_ENABLE_HIP": "OFF"
+            }
+        },
+        {
+            "name": "debug",
+            "hidden": true,
+            "inherits": "cpu",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ALTX_SANITIZERS": "address,undefined"
+            }
+        },
+        {
+            "name": "release",
+            "hidden": true,
+            "inherits": "cpu",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "cpu-serial-debug",
+            "inherits": "debug",
+            "displayName": "CPU serial, debug + sanitizers",
+            "description": "Image dev-cpu. OpenMP off, so a data race cannot hide behind a single thread; ASan and UBSan on.",
+            "cacheVariables": {
+                "ALTX_ENABLE_OPENMP": "OFF"
+            }
+        },
+        {
+            "name": "cpu-omp-debug",
+            "inherits": "debug",
+            "displayName": "CPU OpenMP, debug + sanitizers",
+            "description": "Image dev-cpu. The everyday development configuration.",
+            "cacheVariables": {
+                "ALTX_ENABLE_OPENMP": "ON"
+            }
+        },
+        {
+            "name": "cpu-serial-release",
+            "inherits": "release",
+            "displayName": "CPU serial, release",
+            "description": "Image runtime-cpu, installed as altx-serial. A genuinely non-OpenMP binary, which is what an honest serial-versus-OpenMP profile needs.",
+            "cacheVariables": {
+                "ALTX_ENABLE_OPENMP": "OFF"
+            }
+        },
+        {
+            "name": "cpu-omp-release",
+            "inherits": "release",
+            "displayName": "CPU OpenMP, release",
+            "description": "Image runtime-cpu, installed as altx-omp.",
+            "cacheVariables": {
+                "ALTX_ENABLE_OPENMP": "ON"
+            }
+        },
+        {
+            "name": "coverage",
+            "inherits": "cpu",
+            "displayName": "CPU OpenMP, coverage",
+            "description": "Image dev-cpu. Debug and gcov, no sanitizers: their instrumentation and gcov's do not compose.",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ALTX_ENABLE_OPENMP": "ON",
+                "ALTX_ENABLE_COVERAGE": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "cpu-serial-debug",
+            "configurePreset": "cpu-serial-debug"
+        },
+        {
+            "name": "cpu-omp-debug",
+            "configurePreset": "cpu-omp-debug"
+        },
+        {
+            "name": "cpu-serial-release",
+            "configurePreset": "cpu-serial-release"
+        },
+        {
+            "name": "cpu-omp-release",
+            "configurePreset": "cpu-omp-release"
+        },
+        {
+            "name": "coverage",
+            "configurePreset": "coverage"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "noTestsAction": "error",
+                "stopOnFailure": false
+            }
+        },
+        {
+            "name": "cpu-serial-debug",
+            "inherits": "base",
+            "configurePreset": "cpu-serial-debug"
+        },
+        {
+            "name": "cpu-omp-debug",
+            "inherits": "base",
+            "configurePreset": "cpu-omp-debug"
+        },
+        {
+            "name": "cpu-serial-release",
+            "inherits": "base",
+            "configurePreset": "cpu-serial-release"
+        },
+        {
+            "name": "cpu-omp-release",
+            "inherits": "base",
+            "configurePreset": "cpu-omp-release"
+        },
+        {
+            "name": "coverage",
+            "inherits": "base",
+            "configurePreset": "coverage"
+        }
+    ]
+}

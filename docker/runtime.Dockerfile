@@ -4,6 +4,19 @@ ARG BASE_IMAGE=ghcr.io/intensivedatacomp/altx-cpp/base-cpu:edge
 FROM ${DEV_IMAGE} AS builder
 WORKDIR /src
 COPY . .
+
+# `COPY` writes the tree as root, while the dev image runs as non_root, and git
+# refuses a repository it does not own -- "detected dubious ownership". Without
+# this line the build still succeeds: cmake/GitVersion.cmake falls back to an
+# `unknown` version, and the released binaries carry `unknown` in the
+# provenance of every result file they write. That is precisely the silent
+# mislabelling the derived-version rule exists to prevent, which is also why
+# .dockerignore deliberately keeps .git in the context.
+#
+# `--global` rather than `--add safe.directory '*'`: the exception is for this
+# one path, in a throwaway build stage.
+RUN git config --global --add safe.directory /src
+
 RUN cmake --preset cpu-serial-release && cmake --build --preset cpu-serial-release && \
     cmake --preset cpu-omp-release    && cmake --build --preset cpu-omp-release
 

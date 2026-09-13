@@ -60,6 +60,9 @@ build/
 Build/
 
 # CMake generated files
+# CMakePresets.json is committed -- it is the build matrix. This one is for
+# personal configurations and is per-developer by design.
+CMakeUserPresets.json
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
