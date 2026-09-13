@@ -45,10 +45,19 @@ on:
   #
   # A weekly run with `force_rebuild` set does both -- skips the existence
   # check and passes a fresh APT_SNAPSHOT -- so `apt-get upgrade` resolves
-  # against today's archive. Monday 04:00 UTC: early in the week, so a refresh
-  # that breaks something is found on a working day rather than on a Saturday.
+  # against today's archive.
+  #
+  # Saturday morning, Central European time: a forced run rebuilds every image
+  # from the apt layer down, which is the most expensive thing this repository
+  # asks of CI, and at the weekend it competes with nobody's pull request. The
+  # week then starts with images that are already refreshed and already
+  # scanned.
+  #
+  # Cron here is UTC and does not follow daylight saving, so 04:00 UTC is 06:00
+  # CEST in summer and 05:00 CET in winter. Both are Saturday morning, which is
+  # all this needs to be.
   schedule:
-    - cron: '0 4 * * 1'
+    - cron: '0 4 * * 6'
 
   workflow_dispatch:
     inputs:

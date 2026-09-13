@@ -939,7 +939,10 @@ package set, and an automatic refresh has to defeat **both**:
 2. buildx reuses the apt layer, whose cache key is its instruction text plus the parent image, and
    neither changes when a security update lands in the archive.
 
-`docker-images.yml` therefore runs **weekly** (Monday 04:00 UTC), and on that run -- or a manual
+`docker-images.yml` therefore runs **weekly**, on Saturday morning Central European time
+(`0 4 * * 6`; cron is UTC and ignores daylight saving, so 06:00 CEST or 05:00 CET). A forced run
+rebuilds every image from the apt layer down, which is the most expensive thing this repository
+asks of CI, and at the weekend it competes with nobody's pull request. On that run -- or a manual
 one with `force_rebuild` -- the build-image action skips the existence check *and* passes
 `--build-arg APT_SNAPSHOT=<today>` to every image whose Dockerfile declares it. The first makes
 buildx run; the second is what actually refreshes anything. Everything downstream is unchanged, so
@@ -1210,7 +1213,7 @@ only one source.
 | ------------------- | -------------------------------------------------- | ------------------------------------------------------- |
 | `pre-commit.yml`    | push to **any** branch, pull request, manual       | the same hooks as the local pre-commit                   |
 | `docker-images.yml` | push to `main` / `**docker**` / `v*`, PR, manual, **weekly** | build the image matrix if the content hash is absent; push and Trivy-scan. The weekly run rebuilds regardless and refreshes apt |
-| `build-test.yml`    | pull request, push to `main`                       | the preset matrix: configure, build, `ctest`             |
+| `build-test.yml`    | push to **any** branch, pull request, manual       | the preset matrix: configure, build, `ctest`, coverage   |
 | `nightly.yml`       | schedule                                           | sanitizers, GPU build, Trivy, benchmarks                 |
 | `release.yml`       | push of git tag `v*`                               | rebuild all, version tags, Trivy gating, GitHub release  |
 | `docs.yml`          | push to `main`, git tag                            | Doxygen to GitHub Pages                                  |
@@ -1234,9 +1237,14 @@ Three decisions inside `build-test.yml` that the table does not show:
   to express one cache variable, and two preset families that drift apart. One flag in one
   workflow step keeps the preset a developer runs and the preset CI runs literally the same
   object.
-- **Coverage runs on pull requests too**, though only a push to `main` commits the badge. The plan
-  scheduled it for merges only; it costs about a minute and the number is most useful while the
-  change that moved it is still open.
+- **Coverage runs on every push and pull request**, though only a push to `main` commits the badge.
+  The plan scheduled it for merges only; it costs about a minute and the number is most useful
+  while the change that moved it is still open.
+- **The preset matrix is chosen from the ref, not from the event.** `main` and a manually
+  dispatched run get all four CPU presets; everything else -- a branch push, a pull request -- gets
+  the fast pair. Testing `github.ref` rather than `github.event_name` is what makes that one rule
+  instead of two: a pull request's ref is `refs/pull/N/merge`, so it falls on the right side
+  without a second condition.
 - **`defaults.run.shell: bash`, stated rather than inferred.** The documented default is `bash -e`
   with a fallback to `sh`, and in a container job the fallback is what happens even though
   `dev-cpu` has bash at `/usr/bin/bash` and on `PATH`. The symptom is remote from the cause --
@@ -1339,12 +1347,20 @@ result depends on which commit `edge` happens to name. Two limits keep it from s
 The constraint is that a pull request must stay fast enough to be useful, while a merge to `main`
 can afford breadth.
 
-**Per pull request (target: under ten minutes)**
+**Per push to any branch, and per pull request (target: under ten minutes)**
 
 - `cpu-omp-release`: build and full `ctest`. This is the primary configuration.
 - `cpu-serial-debug` with ASan and UBSan: build and full `ctest`. Cheap, and it catches undefined
   behaviour that the release build hides.
+- Coverage, for the number in the job summary. The badge is only written from `main`.
 - `pre-commit`.
+
+The original rule here was "per pull request". It is **per push**, on the same reasoning
+`pre-commit.yml` already applies to linting: the value of a check is in how early it arrives, and
+learning that a branch does not compile when the pull request is opened is exactly the delay worth
+removing. The branch and the pull request therefore build the same pair twice, which is accepted
+rather than deduplicated for the reason recorded there -- `push` tests the branch as written,
+`pull_request` tests its merge into the base, and those are different trees.
 
 **Per merge to `main`**
 

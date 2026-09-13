@@ -10,7 +10,16 @@ name: Build and test
 # name from the same tree.
 on:
   push:
-    branches: [main]
+    # Every branch, for the reason pre-commit.yml gives for the same rule: the
+    # value of a check is in how early it arrives, and waiting for a pull
+    # request to be opened before finding out that a branch does not compile is
+    # the delay this exists to remove. `'**'` matches names containing `/`, so
+    # `feature/x` counts; tags are excluded, since a tag names a commit that was
+    # already built as a branch.
+    #
+    # What a push gets is not what `main` gets -- see the `presets` step. A
+    # branch gets the fast pair, so iterating stays under a few minutes.
+    branches: ['**']
     # The coverage job commits a badge to `main`. Without this, that commit
     # starts another run of this workflow, which produces the same badge.
     paths-ignore: ['.badges/**']
@@ -87,17 +96,24 @@ jobs:
             echo "::warning title=Development image not published yet::$ref does not exist; falling back to $fallback. The build below does not match this tree's dev image."
           fi
 
-      # A pull request has ten minutes to be useful, so it gets the two presets
-      # that disagree most: the primary release configuration, and a serial
-      # debug build with ASan and UBSan, which catches the undefined behaviour
-      # the optimiser hides. A merge to `main` affords all four.
+      # Work in progress -- a branch push or a pull request -- has ten minutes
+      # to be useful, so it gets the two presets that disagree most: the
+      # primary release configuration, and a serial debug build with ASan and
+      # UBSan, which catches the undefined behaviour the optimiser hides. Only
+      # `main` and an explicitly requested run afford all four; breadth is what
+      # a merge is for.
       - id: presets
+        env:
+          # `github.ref` is refs/pull/N/merge on a pull request, so this is
+          # false there without a second test for the event.
+          IS_MAIN: ${{ github.ref == 'refs/heads/main' }}
+          IS_MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == pull_request ]]; then
-            echo 'list=["cpu-omp-release","cpu-serial-debug"]' >> "$GITHUB_OUTPUT"
-          else
+          if [[ "$IS_MAIN" == true || "$IS_MANUAL" == true ]]; then
             echo 'list=["cpu-serial-debug","cpu-omp-debug","cpu-serial-release","cpu-omp-release"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'list=["cpu-omp-release","cpu-serial-debug"]' >> "$GITHUB_OUTPUT"
           fi
 
   build-test:
