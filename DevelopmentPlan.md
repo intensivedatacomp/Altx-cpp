@@ -1905,6 +1905,26 @@ every invocation.
 `--dirty` matters: a build from a modified working tree gets a hash marked as such, so results
 that cannot be reproduced from any commit are visibly labelled instead of appearing trustworthy.
 
+#### Two things the container build gets wrong by default
+
+Both were found by building `runtime-cpu` the day `CMakeLists.txt` first existed, and both fail
+*silently* -- the image builds, the binaries run, and only the provenance is wrong. That is the
+failure mode this whole section exists to prevent, so the countermeasures belong next to it.
+
+1. **`COPY . .` makes git refuse the repository.** The copied tree is owned by root while
+   `dev-cpu` runs as `non_root`, so every git command in the builder stage fails with "detected
+   dubious ownership" and the version falls back to `unknown`. `runtime.Dockerfile` therefore runs
+   `git config --global --add safe.directory /src` before configuring. The fallback in
+   `cmake/GitVersion.cmake` additionally emits a **CMake warning** when a `.git` is present and
+   git still will not answer: `unknown` is a legitimate answer for a source tarball and must not
+   fail the build, but it must never be reached quietly from a checkout.
+2. **A tracked file excluded from the build context makes every image `-dirty`.** To the git
+   inside the builder, a file that `.dockerignore` filtered out is a *deleted* file, so
+   `git describe --dirty` marks the tree modified -- including a release built from a clean tag,
+   at which point the marker means nothing. `.dockerignore` may therefore exclude untracked
+   artefacts only; `.github/`, `.gitignore` and `.dockerignore` itself were removed from it for
+   this reason, at a cost of a few tens of kilobytes of context.
+
 ### HIP language support
 
 `enable_language(HIP)` is called only under `ALTX_ENABLE_HIP`, with `CMAKE_HIP_ARCHITECTURES` set
@@ -2045,11 +2065,31 @@ worth stating, because it saves a great deal of time.
 | - | ---- | --------- |
 | 1 | `CMakeLists.txt` (minimal: project, C++20, options) | it configures |
 | 2 | `cmake/CompilerWarnings.cmake`, `cmake/Dependencies.cmake` (GoogleTest via FetchContent) | -- |
-| 3 | `CMakePresets.json` -- only `cpu-serial-debug` and `cpu-omp-release` for now | `cmake --preset` works |
+| 3 | `CMakePresets.json` -- the four CPU presets plus `coverage` | `cmake --preset` works |
 | 4 | `tests/CMakeLists.txt`, `tests/unit/test_smoke.cpp` | `ctest` reports one passing test |
 
-Add the remaining presets later, when there is something to build with them. Two are enough to
-prove the option axes are orthogonal.
+**Done.** Row 3 is the one deviation from what this section originally said, which was
+"only `cpu-serial-debug` and `cpu-omp-release` for now". Two presets do prove the option axes are
+orthogonal, but `docker/runtime.Dockerfile` was already written against `cpu-serial-release` and
+`cpu-omp-release`, so stopping at two would have left the runtime image unbuildable by a file that
+already exists. The set is therefore `cpu-serial-debug`, `cpu-omp-debug`, `cpu-serial-release`,
+`cpu-omp-release` and `coverage` -- every configuration whose libraries `dev-cpu` actually
+carries. The MPI and HIP presets still wait for `src/dist/` and `src/backend/hip/`, and for the
+images that can build them.
+
+Two further notes on what milestone 0 turned out to need:
+
+- `cmake/` also holds `Sanitizers.cmake`, `Coverage.cmake`, `Version.cmake`, `GitVersion.cmake`
+  and `AltxOptions.cmake`, one concern each, and the interface targets from
+  [Everything is target-scoped](#everything-is-target-scoped) exist from the first commit rather
+  than being retrofitted. `altx_hop` still waits for HIP.
+- `ALTX_BLAS_VENDOR` is **not** declared yet, and arrives with `find_package(BLAS)` in milestone
+  2. An option that nothing reads is a promise the build does not keep -- worse than a missing
+  one, because it can be set and appear to have been obeyed.
+
+There is no `altx_core` yet: with one `main` and no `src/*.cpp`, the library would have no
+sources, and `apps/altx` links the interface targets directly. It appears in milestone 1, and
+takes the same link line with it.
 
 ### Milestone 1 -- core value types
 

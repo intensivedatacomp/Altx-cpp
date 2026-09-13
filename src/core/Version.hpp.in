@@ -1,0 +1,40 @@
+/// @file
+/// @brief Version and provenance of this binary, derived from git at build
+/// time.
+///
+/// @warning Generated from `src/core/Version.hpp.in` into the build directory
+/// by the `altx_version_header` target. Editing the copy under
+/// `build/<preset>/generated/` has no effect; edit the template.
+///
+/// These three values are the only description of *which* code produced a
+/// result, and they are written into the provenance attributes of every output
+/// file. Nothing else in the project states a version number, so nothing can
+/// disagree with them.
+
+#pragma once
+
+#include <string_view>
+
+namespace altx
+{
+
+/// @brief `git describe --tags --dirty --always` at the time of the build.
+///
+/// `unknown` when the source tree is not a git checkout, or git is absent.
+inline constexpr std::string_view kVersion = "@ALTX_VERSION@";
+
+/// @brief The full commit hash of HEAD, or `unknown`.
+///
+/// Full rather than abbreviated: the abbreviation length that is unambiguous
+/// today is not the one that stays unambiguous, and this value ends up in
+/// result files that outlive the repository state that produced them.
+inline constexpr std::string_view kGitHash = "@ALTX_GIT_HASH@";
+
+/// @brief Whether tracked files were modified when this binary was built.
+///
+/// True means the result cannot be reproduced from any commit. That is a fact
+/// about the run and belongs in its provenance rather than in a build warning
+/// nobody reads.
+inline constexpr bool kGitDirty = @ALTX_GIT_DIRTY@;
+
+}  // namespace altx

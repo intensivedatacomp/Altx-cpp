@@ -19,6 +19,29 @@ To build the image yourself instead — which is also how you get one matching y
 See [docs/DevelopmentEnvironment.md](docs/DevelopmentEnvironment.md) for the other configurations
 and the editor tooling.
 
+## Building
+
+Inside that container, or on any machine with CMake 3.25, Ninja and a C++20 compiler:
+
+```bash
+cmake --preset cpu-omp-debug          # configure
+cmake --build --preset cpu-omp-debug  # build, into build/cpu-omp-debug/
+ctest --preset cpu-omp-debug          # run the tests
+```
+
+A preset is the unit of build, and each one corresponds to a Docker image:
+`cpu-serial-debug` and `cpu-omp-debug` (sanitizers on) for development, `cpu-serial-release` and
+`cpu-omp-release` for what `runtime-cpu` ships, and `coverage` for gcov. `cmake --list-presets`
+prints them with a description each. The MPI and HIP presets arrive with the code that needs them.
+
+The build options are `ALTX_ENABLE_{OPENMP,MPI,HIP,TESTS,COVERAGE}`, `ALTX_SCALAR`
+(`double` or `float`), `ALTX_SANITIZERS`, `ALTX_WERROR` and `ALTX_NATIVE_ARCH`; a configure prints
+the resolved set. The first configure downloads GoogleTest, so it needs the network unless
+`ALTX_ENABLE_TESTS=OFF`.
+
+The version is not written down anywhere: `git describe` is read at build time into a generated
+`core/Version.hpp`, and the full commit hash goes into the provenance of every output file.
+
 ## Contributing
 
 Install the git hooks once per clone. Formatting, linting, typing and spelling are then checked on

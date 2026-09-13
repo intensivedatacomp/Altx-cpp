@@ -13,16 +13,24 @@
 # hashes the Dockerfile plus the explicit `inputs` globs from docker/images.yaml,
 # so excluding a path here can never make a rebuild stop happening.
 
-# CI metadata: read by nothing inside any image.
-.github
-.gitignore
-.dockerignore
-
 # `.git` is deliberately NOT excluded. runtime.Dockerfile does `COPY . .` and
 # then configures CMake, which derives the version from `git describe --tags
 # --dirty` at build time -- see the version invariant in CLAUDE.md. Excluding it
 # would not fail the build; it would silently stamp every released binary and
 # every output file's provenance with an unknown version, which is worse.
+#
+# Which has a consequence that is easy to miss, and cost one confusing image to
+# find: **no *tracked* file may be excluded here.** A tracked file that is
+# absent from the build context is a deleted file to the git inside the
+# builder, so `git describe --dirty` appends `-dirty` and every binary in every
+# image is labelled as built from a modified tree -- including a release built
+# from a clean tag. The marker then means nothing, which is the same as not
+# having it.
+#
+# `.github`, `.gitignore` and `.dockerignore` were excluded here for exactly
+# the "read by nothing inside any image" reason the paragraph above gives, and
+# that is what they did. They are a few tens of kilobytes of context; a
+# meaningful `-dirty` is worth more.
 
 # Local development environments and tool caches
 .venv
