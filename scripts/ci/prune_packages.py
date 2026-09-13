@@ -46,19 +46,28 @@ deletions therefore wait out ``retention.grace_minutes``.
 
 The one thing that would make "untagged is garbage" false
 ---------------------------------------------------------
-**A multi-platform image.** Its tag names an index, and each per-platform
-manifest under that index is a package version of its own with no tag: deleting
-those leaves a tag pointing at children that no longer exist, which is a broken
-image rather than a reclaimed one. Attestation manifests behave the same way,
-which is why the build passes ``provenance: false``.
+**A tag that names an image index.** Each manifest under an index is a package
+version of its own with no tag: deleting those leaves a tag pointing at children
+that no longer exist, which is a broken image rather than a reclaimed one.
 
-Every image is single-platform today, so this cannot arise -- but ``platforms``
-is per-image in ``images.yaml`` and adding ``linux/arm64`` is a one-line change
-that would silently turn this script into a wrecking ball. Untagged deletion is
-therefore **skipped, loudly, for any image that declares more than one
-platform**. Making it work there means resolving each index's children and
-protecting those digests; the guard is here so that day starts with a warning
-instead of an outage.
+A multi-platform image is the obvious way to get one, but not the only one.
+Attestation manifests do it too, which is why the build passes
+``provenance: false``. So does ``docker buildx imagetools create``, which by
+default wraps even a single manifest in a new one-entry index rather than
+copying it. That is not hypothetical: the retag that moved ``edge`` on
+2026-09-13 wrote such indexes, this script then deleted the ``base-cpu``
+manifest beneath one, and ``base-cpu:edge`` stopped resolving. The retag now
+passes ``--prefer-index=false``, and ``.github/actions/build-image`` fails any
+tag it writes that resolves to an index, so the invariant is checked rather
+than assumed.
+
+Every image is single-platform today -- but ``platforms`` is per-image in
+``images.yaml`` and adding ``linux/arm64`` is a one-line change that would
+silently turn this script into a wrecking ball. Untagged deletion is therefore
+**skipped, loudly, for any image that declares more than one platform**. Making
+it work there means resolving each index's children and protecting those
+digests (and relaxing the build action's check); the guard is here so that day
+starts with a warning instead of an outage.
 
 Usage
 -----
