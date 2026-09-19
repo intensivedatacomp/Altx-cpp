@@ -235,9 +235,36 @@ COPY --chown=${UID}:${GID} .pre-commit-config.yaml /tmp/precommit/.pre-commit-co
 # with `find -print -quit` rather than `find | head -1` for the reason
 # runtime.Dockerfile records against DL4006: a pipe throws away find's own exit
 # status, so a broken find would look like a passing test.
+#
+# The retry is for one specific failure, and it is not one `curl --retry` can
+# reach. `language: golang` has no Go toolchain to use here, so pre-commit
+# downloads its own -- in its own Python, with `urlopen`: first
+# https://go.dev/dl/?mode=json to learn the current version, then the tarball
+# from dl.google.com. Neither call is ours to add flags to, and neither is
+# retried: one `[Errno 104] Connection reset by peer` from either host fails
+# `install-hooks`, and with it the weekly image refresh, a tenth of a second
+# after the actionlint environment starts. That is what happened on
+# 2026-09-19, with the hadolint environment before it having just downloaded
+# cleanly -- a reset from one host, not an outage.
+#
+# Three attempts with a widening pause. A retry is cheap here because
+# pre-commit does not restart from nothing: every environment already built
+# records its own install state, so the loop re-enters `install-hooks` and it
+# skips straight to the one that failed. Nor does it resume onto wreckage --
+# `_hook_install` builds each environment inside `clean_path_on_failure`, so
+# the half-installed directory is gone before the exception surfaces here.
+#
+# `exit 1` rather than letting the loop fall out: after the last attempt the
+# `for` would end with the status of `sleep`, and a build that cannot install
+# its hooks must not go on to prune a cache it never populated.
 WORKDIR /tmp/precommit
 RUN git init -q . && \
-    pre-commit install-hooks && \
+    for attempt in 1 2 3; do \
+        pre-commit install-hooks && break; \
+        [ "${attempt}" = 3 ] && exit 1; \
+        echo "install-hooks failed; retrying in $((attempt * 15))s"; \
+        sleep "$((attempt * 15))"; \
+    done && \
     rm -rf /tmp/precommit && \
     find "${HOME}/.cache/pre-commit" -path '*/golangenv-*/bin/*' \
         -type f ! -name actionlint -delete && \
