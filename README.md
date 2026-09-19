@@ -2,7 +2,7 @@
 
 [![Pre-commit](https://github.com/intensivedatacomp/Altx-cpp/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/intensivedatacomp/Altx-cpp/actions/workflows/pre-commit.yml)
 [![Build and test](https://github.com/intensivedatacomp/Altx-cpp/actions/workflows/build-test.yml/badge.svg)](https://github.com/intensivedatacomp/Altx-cpp/actions/workflows/build-test.yml)
-![Coverage](.badges/coverage.svg)
+[![Coverage](.badges/coverage.svg)](https://github.com/intensivedatacomp/Altx-cpp/actions/workflows/build-test.yml)
 
 ## Development
 
