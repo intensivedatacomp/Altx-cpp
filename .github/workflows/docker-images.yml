@@ -23,6 +23,13 @@ on:
       # that can never fire.
       - '**docker**'
     tags: ['v*']
+
+  # A pull request builds only the images it can actually have changed, and
+  # `src/`/`apps/` are not among them -- see the `mode` step of `prepare`, which
+  # is where the whole "what may this event skip" rule lives. The trigger stays
+  # broad on purpose: the decision needs the *diff*, which a `paths:` filter
+  # here could only approximate by restating docker/images.yaml's `inputs` in a
+  # second place, and would then get wrong for every image at once.
   pull_request:
     branches: [main, master]
 
@@ -86,21 +93,80 @@ jobs:
       push:      ${{ steps.mode.outputs.push }}
       force:     ${{ steps.mode.outputs.force }}
     steps:
+      # Full history, unlike a plain checkout here before: the `mode` step
+      # decides what to build by diffing against the base commit, and a shallow
+      # clone does not contain it. Getting this wrong does not break a build --
+      # images.py reads an undiffable ref as "everything changed" -- it silently
+      # costs the saving, which is the harder failure to notice.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
       - run: pip install --quiet pyyaml
-      - id: plan
-        run: python3 scripts/ci/images.py plan --github-output
+
+      # Ahead of `plan`, because it decides what `plan` is allowed to leave out.
       - id: mode
+        env:
+          # The commit before the push -- all zeros for a newly created branch,
+          # and a commit no longer reachable after a force-push. images.py
+          # treats both as "cannot diff" and builds everything.
+          BEFORE: ${{ github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
         run: |
+          set -euo pipefail
           # A fork PR's GITHUB_TOKEN is downgraded to packages:read.
           echo "push=${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}" >> "$GITHUB_OUTPUT"
           # The weekly schedule always refreshes; a manual run asks. Nothing
           # else does, so an ordinary push still gets the cheap behaviour of
           # skipping images whose content has not changed.
-          echo "force=${{ github.event_name == 'schedule' || inputs.force_rebuild == true }}" >> "$GITHUB_OUTPUT"
+          force=${{ github.event_name == 'schedule' || inputs.force_rebuild == true }}
+          echo "force=$force" >> "$GITHUB_OUTPUT"
+
+          # Which images this event may skip, expressed as the ref to diff
+          # against. Empty means "build every one of them", and that is the
+          # answer in every case not named below:
+          #
+          #   * a forced run exists precisely to rebuild what has *not* changed;
+          #   * a `v*` tag publishes `latest` and `vX.Y.Z` from every image;
+          #   * a manual run without `force_rebuild` is someone asking for the
+          #     full matrix by hand, and should get it.
+          #
+          # `recipe_only` is the pull-request rule. A change under `src/` or
+          # `apps/` then rebuilds no image: build-test.yml compiles those same
+          # sources from the same commit, in parallel with this, so assembling
+          # the release image would only compile them a second time to prove
+          # the same thing. A push to `main` or to a `**docker**` branch does
+          # not pass it, so a *published* image always matches its commit.
+          since=""
+          recipe_only=false
+          if [[ "$force" != true && "$GITHUB_REF" != refs/tags/* ]]; then
+            case "$GITHUB_EVENT_NAME" in
+              pull_request) since="$BASE"; recipe_only=true ;;
+              push)         since="$BEFORE" ;;
+            esac
+          fi
+          echo "since=$since" >> "$GITHUB_OUTPUT"
+          echo "recipe_only=$recipe_only" >> "$GITHUB_OUTPUT"
+          # A job that is skipped says nothing at all, so the reason it was
+          # skipped has to be recorded while there is still a step to record it.
+          echo "::notice title=Image scope::diffing against ${since:-<nothing: every image builds>}, recipe_only=$recipe_only"
+
+      - id: plan
+        env:
+          SINCE: ${{ steps.mode.outputs.since }}
+          RECIPE_ONLY: ${{ steps.mode.outputs.recipe_only }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ -n "$SINCE" ]]; then
+            args+=(--changed-since "$SINCE")
+          fi
+          if [[ "$RECIPE_ONLY" == true ]]; then
+            args+=(--recipe-only)
+          fi
+          python3 scripts/ci/images.py plan --github-output "${args[@]}"
 
   tier0:
     needs: prepare
@@ -180,6 +246,41 @@ jobs:
           force: ${{ needs.prepare.outputs.force }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
+  # The one status worth requiring on a branch protection rule.
+  #
+  # The tier jobs are the wrong thing to require, for two reasons that both
+  # became true with the narrowing above. Their names come from the matrix, so
+  # they change whenever docker/images.yaml does; and a job skipped for having
+  # nothing to build reports **no status at all**, so a required check by that
+  # name would simply never arrive and the pull request would wait for ever.
+  #
+  # This job always runs and fails only when a tier really failed. `skipped` is
+  # a pass: it is the answer this whole change exists to produce.
+  gate:
+    name: Images
+    needs: [prepare, tier0, tier1, tier2]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: >-
+            prepare:${{ needs.prepare.result }} tier0:${{ needs.tier0.result }}
+            tier1:${{ needs.tier1.result }} tier2:${{ needs.tier2.result }}
+        run: |
+          set -euo pipefail
+          echo "$RESULTS"
+          failed=""
+          for entry in $RESULTS; do
+            case "${entry#*:}" in
+              success|skipped) ;;
+              *) failed="$failed ${entry}" ;;
+            esac
+          done
+          if [[ -n "$failed" ]]; then
+            echo "::error title=Image build failed::${failed# }"
+            exit 1
+          fi
+
   # Deletes what this build superseded: previous `edge` manifests, now
   # untagged, in the per-image packages, and hash-/sha- versions past the keep
   # window in buildcache. The policy is docker/images.yaml's `retention:` block.
@@ -194,8 +295,16 @@ jobs:
     # does not exist. `!cancelled()` keeps this eligible when a tier was
     # skipped for having no images. A pull request never prunes -- it
     # supersedes nothing.
+    #
+    # Nor does an event that built nothing, which is now the common case: with
+    # every tier empty there is no new manifest, so nothing has been superseded
+    # and the whole job would be an API sweep that deletes by age what it was
+    # never meant to delete by age.
     if: ${{ !cancelled() && github.event_name != 'pull_request'
             && needs.prepare.outputs.push == 'true'
+            && (needs.prepare.outputs.tier0 != '[]'
+                || needs.prepare.outputs.tier1 != '[]'
+                || needs.prepare.outputs.tier2 != '[]')
             && needs.tier0.result != 'failure' && needs.tier1.result != 'failure'
             && needs.tier2.result != 'failure' }}
     runs-on: ubuntu-latest

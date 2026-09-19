@@ -574,7 +574,7 @@ generated in `scripts/ci/images.py`; nothing else constructs a reference.
 | `vX.Y.Z`                  | per image  | push of git tag `v*`                | no      | releases, reproducibility    |
 | `latest`                  | per image  | push of git tag `v*`                | yes     | humans, "give me the release"|
 | `edge`                    | per image  | push to `main` or a `*docker*` branch | yes   | **humans: newest dev image** |
-| `<name>-sha-<short>`      | buildcache | every build                         | no      | debugging a specific build   |
+| `<name>-sha-<short>`      | buildcache | every build of that image           | no      | debugging a specific build   |
 | `<name>-hash-<content>`   | buildcache | when the image inputs change        | no      | **CI jobs**                  |
 | `<name>-cache`            | buildcache | every build that pushes             | yes     | buildx, `type=registry`      |
 
@@ -1290,7 +1290,7 @@ only one source.
 | Workflow            | Trigger                                            | Does                                                    |
 | ------------------- | -------------------------------------------------- | ------------------------------------------------------- |
 | `pre-commit.yml`    | push to **any** branch, pull request, manual       | the same hooks as the local pre-commit                   |
-| `docker-images.yml` | push to `main` / `**docker**` / `v*`, PR, manual, **weekly** | build the image matrix if the content hash is absent; push and Trivy-scan. The weekly run rebuilds regardless and refreshes apt |
+| `docker-images.yml` | push to `main` / `**docker**` / `v*`, PR, manual, **weekly** | build the images *this event can have changed*, and only if the content hash is absent; push and Trivy-scan. A pull request additionally excludes `src`/`apps`. The weekly run rebuilds every image regardless and refreshes apt |
 | `build-test.yml`    | push to **any** branch, pull request, manual       | the preset matrix: configure, build, `ctest`, coverage   |
 | `nightly.yml`       | schedule                                           | sanitizers, GPU build, Trivy, benchmarks                 |
 | `release.yml`       | push of git tag `v*`                               | rebuild all, version tags, Trivy gating, GitHub release  |
@@ -1403,6 +1403,37 @@ exactly the branch that must not wait for a pull request to discover that a Dock
 builds -- and the cost is near zero, since the content-hash check skips a build whose inputs have
 not changed.
 
+**Which images build, within the branches that do.** The content-hash check makes a *build* cheap
+to skip, and leaves everything around it: on a push that changes no image, three jobs still set up
+buildx, log in, retag and run two Trivy scans each, per image. So `prepare` narrows the matrix
+itself. An image is in it when a file it is built from changed -- its Dockerfile, its `inputs`, its
+`payload_inputs`, or, recursively, anything its parents are built from -- and is left out
+otherwise. `docker/images.yaml` and `scripts/ci/images.py` count as a change to *every* image: the
+first holds the descriptions and build arguments, the second defines the hashing rule, and neither
+appears in any glob.
+
+Skipping is safe rather than merely cheap, and for one reason worth stating: an image is only ever
+left out when its content hash is unchanged, so the `hash-` tag it would have published **already
+exists**. `build-test.yml` computes that same tag from the same tree and finds it, exactly as it
+would have after a rebuild. The resolver fails open -- a base commit it cannot diff against, from a
+new branch, a force-push or a shallow clone, means "build everything" -- because a needless rebuild
+costs minutes while a wrongly skipped one leaves the registry a commit behind with nothing to say
+so.
+
+**A pull request also excludes `src/` and `apps/`**, through the `payload_inputs` key those globs
+now live under in `docker/images.yaml`. They are what `runtime-cpu` *compiles*, not how it is
+built, and `build-test.yml` compiles the same sources from the same commit in parallel -- so
+assembling the release image on a pull request spends minutes to prove what the preset matrix is
+already proving. The build files stay under `inputs`: a renamed preset breaks `runtime.Dockerfile`,
+which names the presets it builds, and the preset matrix would not notice. A push to `main`, a
+`v*` tag and a `**docker**` branch all ignore the distinction, so a *published* image always
+matches its commit.
+
+**The required status check is therefore `gate`, not a tier.** A skipped job reports no status at
+all, so requiring a per-image job name would leave a pull request waiting for a check that is never
+coming -- and those names come from the matrix, so they change with `docker/images.yaml`. `gate`
+always runs, treats `skipped` as a pass and fails only on a real failure.
+
 **Those branches also move `edge`.** The alternative -- immutable tags only until a merge -- was
 tried first and is the more conservative rule, but it makes the image packages unobservable
 during precisely the work that changes them: `dev-cpu:edge` would keep pointing at the last merge
@@ -1410,7 +1441,8 @@ while the branch that rewrites the image publishes nothing anyone can pull by na
 "newest development image", and an image-work branch is where the newest development image is.
 
 The price is stated rather than hidden: `edge` may point at unmerged work, and an abandoned branch
-leaves it there until the next push to `main`. That is tolerable because `edge` is a convenience
+leaves it there until the next push to `main` *that rebuilds that image* -- which, since the matrix
+was narrowed, is no longer every push to `main`, and at the outside is the weekly forced run. That is tolerable because `edge` is a convenience
 tag for humans and nothing consumes it -- **CI still pins `hash-…` exclusively**, so no build
 result depends on which commit `edge` happens to name. Two limits keep it from spreading:
 
@@ -1432,6 +1464,9 @@ can afford breadth.
   behaviour that the release build hides.
 - Coverage, for the number in the job summary. The badge is only written from `main`.
 - `pre-commit`.
+- **No image build at all**, unless the change touches what an image is built from -- and a change
+  under `src/` or `apps/` does not count here, since the presets above already compile it. See
+  [Workflows](#workflows).
 
 The original rule here was "per pull request". It is **per push**, on the same reasoning
 `pre-commit.yml` already applies to linting: the value of a check is in how early it arrives, and
@@ -1450,6 +1485,9 @@ rather than deduplicated for the reason recorded there -- `push` tests the branc
   MPI implementation can therefore be *finished and verified* in CI with no cluster; only the
   scaling numbers need real hardware.
 - The cross-language round-trip against the committed Python fixtures.
+- Every image the merge actually changed, rebuilt and published — `src/` and `apps/` do count
+  here, unlike on a pull request, because this is where `runtime-cpu` has to start matching the
+  commit again.
 
 **Nightly**
 
