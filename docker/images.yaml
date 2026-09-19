@@ -82,6 +82,16 @@ defaults:
 #               listing. Anything not listed here is invisible to the hash, so
 #               a missing entry means "never rebuilt" -- the resolver therefore
 #               fails on a glob that matches no file.
+#   payload_inputs
+#               Inputs that are compiled *into* the image rather than
+#               describing how it is built. They are part of the content hash
+#               exactly like `inputs` -- a changed source means a different
+#               image -- but a *pull request* that touches only these does not
+#               rebuild the image, because .github/workflows/build-test.yml
+#               already compiles the same sources from the same commit and a
+#               second compile proves nothing new. A push to `main`, a `v*` tag
+#               and a `**docker**` branch all still rebuild, so what is
+#               published always matches the commit.
 #   build_args  Static build arguments. Part of the hash.
 #   trivy       Overrides defaults.trivy.
 #   moving_tag  The human-facing tag refreshed on a push to the default branch.
@@ -138,20 +148,29 @@ images:
       - CMakeLists.txt
       - CMakePresets.json
       - cmake/**
-      - src/**
-      - apps/**
       # Not `tests/**`: the builder stage configures with
       # ALTX_ENABLE_TESTS=OFF, so no test source reaches this image and a
       # change to one cannot change its content. The tests are CI's job
       # (.github/workflows/build-test.yml), not the release image's.
       #
-      # `external/**` joins this list when it exists -- a glob that matches
-      # nothing is a resolver error by design, so it cannot be added early.
-      #
       # `.dockerignore` is listed because this is the one image whose content
       # depends on it: it decides which files reach `COPY . .`, and therefore
       # what `git describe` inside the builder sees.
       - .dockerignore
+    # The build recipe is above; this is what it compiles. The split is only
+    # about *when a pull request rebuilds*, never about the hash -- see the key
+    # list at the top of this file.
+    #
+    # The build files stay under `inputs` deliberately. A renamed preset or a
+    # changed install rule breaks `runtime.Dockerfile`, which names the presets
+    # it builds, and build-test.yml would not notice: it configures the same
+    # presets but never assembles the image.
+    #
+    # `external/**` joins this list when it exists -- a glob that matches
+    # nothing is a resolver error by design, so it cannot be added early.
+    payload_inputs:
+      - src/**
+      - apps/**
     moving_tag: edge
 
   runtime-cpu-mpi:
@@ -176,9 +195,10 @@ images:
       - CMakeLists.txt
       - CMakePresets.json
       - cmake/**
+      - .dockerignore
+    payload_inputs:    # see runtime-cpu
       - src/**
       - apps/**
-      - .dockerignore
     moving_tag: edge
 
   dev-gpu:
@@ -219,9 +239,10 @@ images:
       - CMakeLists.txt
       - CMakePresets.json
       - cmake/**
+      - .dockerignore
+    payload_inputs:    # see runtime-cpu
       - src/**
       - apps/**
-      - .dockerignore
     moving_tag: edge
 
 # ---------------------------------------------------------------------------

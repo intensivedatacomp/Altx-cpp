@@ -49,6 +49,27 @@ Commands
 ``build-args``  ``--build-arg`` flags for one image, ready to paste into docker
 ``description NAME``  one image's description, disabled images included
 
+Building only what changed
+--------------------------
+``plan`` accepts two flags that narrow the *tiers* -- and only the tiers, since
+``scripts/ci/prune_packages.py`` resolves the same plan and must keep seeing
+every enabled image, or it would stop protecting the tags of one it did not
+build:
+
+``--changed-since REF``
+    Drop an image from the matrix when nothing it is built from has changed
+    since ``REF``, its parents included. The content hash of such an image is
+    unchanged by definition, so its ``hash-`` tag already exists and every
+    consumer -- ``build-test.yml`` pins that tag -- still resolves. Fails open:
+    a ref that cannot be diffed against means "everything changed".
+
+``--recipe-only``
+    A change to ``payload_inputs`` alone does not make an image affected. Those
+    are the sources compiled *into* an image rather than the description of how
+    it is built, and ``build-test.yml`` already compiles them from the same
+    commit. Used on pull requests; a push to ``main`` must publish an image that
+    matches the commit, so it does not pass this.
+
 Run it anywhere: ``python3 scripts/ci/images.py plan``, or, if PyYAML is not
 installed, ``uv run scripts/ci/images.py plan``. uv reads the ``# /// script``
 block above (PEP 723), installs PyYAML into a cached environment, and treats
@@ -63,6 +84,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -107,6 +129,13 @@ MAX_TIERS = 3
 # build argument rather than a literal LABEL because each Dockerfile builds
 # several images; see the end of docker/base.Dockerfile.
 DESCRIPTION_ARG = "IMAGE_DESCRIPTION"
+
+# Files no image lists under `inputs`, and on which every image's hash depends
+# anyway: `images.yaml` holds the descriptions and the static build arguments,
+# and this file defines the hashing rule. A change to either makes every image
+# affected, whatever the globs say -- without this, editing a description would
+# skip the very build that is supposed to republish it.
+GLOBAL_INPUTS = ("docker/images.yaml", "scripts/ci/images.py")
 
 # ``images.yaml`` is free-form nested YAML and ``resolve`` builds an equally
 # free-form record out of it, so the value type really is Any. Naming the two
@@ -279,12 +308,41 @@ def expand(root: Path, pattern: str) -> list[Path]:
     return matches
 
 
+def patterns_of(spec: Config, *, payload: bool = True) -> list[str]:
+    """List the globs one image's content comes from.
+
+    The Dockerfile first, then ``inputs``, then ``payload_inputs`` -- the order
+    the digest is built in, so this is also the definition of what the hash
+    covers.
+
+    Parameters
+    ----------
+    spec : Config
+        One image's entry in ``images.yaml``.
+    payload : bool, optional
+        Include ``payload_inputs``. `content_hash` always does -- payload is
+        image content like any other -- and only the "what changed" question
+        ever sets this to ``False``.
+
+    Returns
+    -------
+    list of str
+        Globs, relative to the top of the working tree.
+    """
+    return [
+        spec["dockerfile"],
+        *spec.get("inputs", []),
+        *(spec.get("payload_inputs", []) if payload else []),
+    ]
+
+
 def content_hash(root: Path, config: Config, name: str, cache: dict[str, str]) -> str:
     """Hash everything one image is built from, parents included.
 
     The digest covers the Dockerfile byte for byte, every file matched by
-    ``inputs``, the static ``build_args``, and -- recursively -- the digest of
-    every parent, so a base-image change propagates to every descendant.
+    ``inputs`` or ``payload_inputs``, the static ``build_args``, and --
+    recursively -- the digest of every parent, so a base-image change propagates
+    to every descendant.
 
     Parameters
     ----------
@@ -321,8 +379,7 @@ def content_hash(root: Path, config: Config, name: str, cache: dict[str, str]) -
             f"parent\0{arg}\0{content_hash(root, config, parent, cache)}\0".encode()
         )
 
-    patterns = [spec["dockerfile"], *spec.get("inputs", [])]
-    for pattern in patterns:
+    for pattern in patterns_of(spec):
         for path in expand(root, pattern):
             rel = path.relative_to(root).as_posix()
             digest.update(f"file\0{rel}\0{hash_file(path)}\0".encode())
@@ -336,6 +393,149 @@ def content_hash(root: Path, config: Config, name: str, cache: dict[str, str]) -
 
     cache[name] = digest.hexdigest()[:HASH_LENGTH]
     return cache[name]
+
+
+# ---------------------------------------------------------------------------
+# Change detection
+# ---------------------------------------------------------------------------
+
+
+def pattern_regex(pattern: str) -> re.Pattern[str]:
+    """Compile one ``inputs`` glob into a regular expression over paths.
+
+    Neither of the two obvious tools does this correctly. ``fnmatch``'s ``*``
+    crosses ``/``, so ``docker/*`` would match ``docker/vim/vimrc``; and `expand`
+    can only see the files that are *present*, while a **deleted** file changes
+    an image's hash and so has to count as a change too.
+
+    ``**`` spans directories and matches the empty path, so ``docker/vim/**``
+    matches ``docker/vim`` and everything under it. ``*`` and ``?`` stay within
+    one segment.
+
+    Parameters
+    ----------
+    pattern : str
+        A glob as written in ``images.yaml``.
+
+    Returns
+    -------
+    re.Pattern
+        Anchored at both ends, to be matched against repository-relative POSIX
+        paths.
+    """
+    parts = []
+    for segment in pattern.split("/"):
+        if segment == "**":
+            parts.append(".*")
+            continue
+        piece = ""
+        for char in segment:
+            if char == "*":
+                piece += "[^/]*"
+            elif char == "?":
+                piece += "[^/]"
+            else:
+                piece += re.escape(char)
+        parts.append(piece)
+    # `a/**` has become `a` + `.*`, and the separator between them belongs to
+    # the `**`: without this, the pattern would not match the directory itself.
+    joined = "/".join(parts).replace("/.*", "(?:/.*)?")
+    return re.compile(f"^{joined}$")
+
+
+def changed_since(root: Path, ref: str) -> set[str] | None:
+    """List the paths that differ between ``ref`` and ``HEAD``.
+
+    Parameters
+    ----------
+    root : Path
+        The top of the working tree.
+    ref : str
+        What to compare against -- ``github.event.before`` for a push, the base
+        commit for a pull request.
+
+    Returns
+    -------
+    set of str or None
+        Repository-relative POSIX paths, or ``None`` when the comparison cannot
+        be made: the all-zero ref of a newly created branch, a commit a shallow
+        clone does not contain, a force-push that orphaned it, or no git at all.
+
+        ``None`` means "assume everything changed", and that direction is not
+        arbitrary. Skipping a build because the diff was unreadable would leave
+        the registry a commit behind with nothing to say so, while rebuilding
+        needlessly costs minutes and is caught by the content-hash check anyway.
+    """
+    if not ref or set(ref) <= {"0"}:
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), "diff", "--name-only", ref, "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    return {line for line in out.stdout.splitlines() if line}
+
+
+def affected_images(
+    config: Config,
+    names: list[str],
+    changed: set[str] | None,
+    *,
+    recipe_only: bool = False,
+) -> set[str]:
+    """Decide which images a set of changed files can have altered.
+
+    Parameters
+    ----------
+    config : Config
+        The parsed ``images.yaml``.
+    names : list of str
+        The enabled images to consider.
+    changed : set of str or None
+        Paths that changed, as returned by `changed_since`. ``None`` means the
+        question could not be answered, and every image is affected.
+    recipe_only : bool, optional
+        Ignore ``payload_inputs`` when deciding. See the module docstring.
+
+    Returns
+    -------
+    set of str
+        The images to build. An image not in this set has an unchanged content
+        hash, so its ``hash-`` tag already exists in the registry.
+    """
+    if changed is None or changed & set(GLOBAL_INPUTS):
+        return set(names)
+
+    affected = set()
+    for name in names:
+        spec = config["images"][name]
+        matchers = [
+            pattern_regex(pattern)
+            for pattern in patterns_of(spec, payload=not recipe_only)
+        ]
+        if any(matcher.match(path) for path in changed for matcher in matchers):
+            affected.add(name)
+
+    # A changed parent changes every descendant's hash, so affectedness flows
+    # down the graph. Iterating to a fixed point rather than walking the tiers
+    # keeps this correct whatever order `names` arrives in.
+    while True:
+        grown = {
+            name
+            for name in names
+            if name not in affected
+            and any(
+                parent in affected
+                for parent in config["images"][name].get("parents", {}).values()
+            )
+        }
+        if not grown:
+            return affected
+        affected |= grown
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +587,7 @@ def tiers(config: Config, names: list[str]) -> list[list[str]]:
     ]
 
 
-def resolve(root: Path, config: Config) -> Plan:
+def resolve(root: Path, config: Config, only: set[str] | None = None) -> Plan:
     """Turn the configuration into every reference CI will need.
 
     Parameters
@@ -396,6 +596,11 @@ def resolve(root: Path, config: Config) -> Plan:
         The top of the working tree.
     config : Config
         The parsed ``images.yaml``.
+    only : set of str or None, optional
+        Restrict the ``tiers`` to these images, as decided by `affected_images`.
+        ``images`` is **not** narrowed: ``scripts/ci/prune_packages.py`` resolves
+        the same plan to learn which tags to protect, and an image missing from
+        that map is one whose published tags it would consider garbage.
 
     Returns
     -------
@@ -462,7 +667,10 @@ def resolve(root: Path, config: Config) -> Plan:
 
     return {
         "images": images,
-        "tiers": [[images[n] for n in tier] for tier in tiers(config, enabled)],
+        "tiers": [
+            [images[n] for n in tier if only is None or n in only]
+            for tier in tiers(config, enabled)
+        ],
         "retention": config["retention"],
         "namespace": prefix,
         "cache_repo": cache_repo,
@@ -521,6 +729,17 @@ def main() -> None:
         action="store_true",
         help="also append the plan to $GITHUB_OUTPUT",
     )
+    plan_parser.add_argument(
+        "--changed-since",
+        metavar="REF",
+        help="restrict the tiers to the images affected since REF; "
+        "an unreadable REF means every image",
+    )
+    plan_parser.add_argument(
+        "--recipe-only",
+        action="store_true",
+        help="a change to payload_inputs alone does not make an image affected",
+    )
 
     ref_parser = sub.add_parser("ref", help="print one image's immutable reference")
     ref_parser.add_argument("image")
@@ -541,7 +760,16 @@ def main() -> None:
         print(description(config, args.image))
         return
 
-    plan = resolve(root, config)
+    only: set[str] | None = None
+    if args.command == "plan" and args.changed_since:
+        only = affected_images(
+            config,
+            [n for n, s in config["images"].items() if s.get("enabled", False)],
+            changed_since(root, args.changed_since),
+            recipe_only=args.recipe_only,
+        )
+
+    plan = resolve(root, config, only)
 
     if args.command == "plan":
         print(json.dumps(plan, indent=2))

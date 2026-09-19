@@ -251,9 +251,18 @@ runs:
     # Vulnerability scan
     # ---------------------------------------------------------------------
     #
-    # Scanning is unconditional -- including when the build was skipped, since
-    # an image whose content has not changed still acquires new CVEs over time,
-    # and that is precisely the image everything else is built on.
+    # Scanning is unconditional *within this action* -- including when the build
+    # was skipped and the step above only retagged an existing manifest.
+    #
+    # Which is no longer the same as "every image on every event", and the
+    # difference is deliberate. `prepare` now leaves an image out of the matrix
+    # entirely when nothing it is built from has changed, so this action never
+    # runs for it and it is not scanned on that event. An unchanged image does
+    # keep acquiring CVEs, and the answer to that is the Saturday `force`
+    # rebuild, which scans all of them -- not a scan on every push of an image
+    # identical to the one scanned an hour earlier. What still matters is that
+    # an image which *did* change is scanned before it can be merged, and that
+    # is exactly the case this action runs in.
     #
     # `ref` resolves in all three cases: pushed just now, pushed by an earlier
     # run, or loaded into the local daemon by a no-push build (trivy checks the

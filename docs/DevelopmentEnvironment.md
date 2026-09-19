@@ -52,8 +52,23 @@ python3 scripts/ci/images.py plan              # the whole resolved matrix
 
 Images are built on every push to `main`, on `v*` tags, on pull requests, and on any branch whose
 name contains `docker` — image work is the case where waiting for a pull request to find out that
-a Dockerfile broke is the most expensive. A build is skipped entirely when an image with the same
-content hash already exists, so most of those runs cost only the hash computation.
+a Dockerfile broke is the most expensive.
+
+Which of them is built is decided per image, and usually the answer is none. An image is rebuilt
+only when something it is built from changed — its Dockerfile, its `inputs`, or anything its
+parents are built from — and is otherwise left out of the run altogether, not merely skipped at
+the build step: it is not retagged and not scanned either. A change to `docker/images.yaml` or
+`scripts/ci/images.py` counts for every image, since those hold the descriptions, the build
+arguments and the hashing rule itself.
+
+@note A **pull request** additionally ignores `src/` and `apps/`, the `payload_inputs` of
+`runtime-cpu`. Those are what it compiles rather than how it is built, and `build-test.yml` already
+compiles them from the same commit. A push to `main`, a `v*` tag and a `**docker**` branch all
+rebuild it, so a published image always matches its commit.
+
+Nothing downstream can be caught out by this: an image is left out only when its content hash is
+unchanged, so the `hash-` tag already exists and `python3 scripts/ci/images.py ref dev-cpu` still
+resolves. The weekly Saturday run rebuilds and rescans everything regardless.
 
 `edge` is refreshed by a push to `main` **and** by a push to a `*docker*` branch, so the image
 being worked on is pullable by name while the work is happening. It can therefore point at
