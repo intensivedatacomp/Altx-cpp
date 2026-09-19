@@ -136,9 +136,18 @@ runs:
           echo ARGS
         } >> "$GITHUB_OUTPUT"
 
+    # Pinned by digest like every other action here; it was the one exception,
+    # on a floating `@v6` that silently moved under the build.
+    #
+    # v7 rather than the newest v6: v6 runs on node20, which GitHub has
+    # deprecated -- the runner already forces node24 on it and warns on every
+    # build. v7.0.0 is that migration and nothing else that touches this file:
+    # the runtime, ESM packaging, and the removal of two `DOCKER_BUILD_*`
+    # environment variables the workflow never set. No input is renamed or
+    # removed; the twelve used below all still exist in v7.4.0.
     - id: build
       if: steps.check.outputs.exists == 'false'
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
       with:
         context: ${{ fromJson(inputs.image).context }}
         file: ${{ fromJson(inputs.image).dockerfile }}
