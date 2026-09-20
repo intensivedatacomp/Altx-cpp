@@ -44,7 +44,7 @@ it can live without making commits slow or unreliable.
 | ------------ | ------------------------------ | ------------------------------------------------- |
 | `pre-commit` | nothing but the changed files  | everything in @ref quality_checks                  |
 | `pre-push`   | the whole tree, still local    | Doxygen documentation coverage — not yet written   |
-| CI           | a **configured build**         | the preset matrix, `ctest`, coverage; clang-tidy and `-Wdocumentation` still to come |
+| CI           | a **configured build**         | the preset matrix, `ctest`, coverage, @ref quality_ci_docs "Doxygen"; clang-tidy and `-Wdocumentation` still to come |
 
 clang-tidy is deliberately *not* a commit hook: it needs `compile_commands.json`, which exists only
 after CMake has configured a build directory. A hook that silently skips when that file is missing
@@ -344,6 +344,33 @@ Two things are worth knowing before reading a report:
   point.
 - **`tests/` is excluded, and so is everything under `build/`**, GoogleTest included. The number is
   coverage of the code that ships.
+
+@subsection quality_ci_docs The documentation job
+
+`.github/workflows/docs.yml` builds this site with Doxygen, also inside `dev-cpu` — which carries
+the doxygen and graphviz the site is generated with, and whose version the settings depend on.
+
+It runs on **every pull request** as well as on a push to `main` and on a release tag, but it
+publishes to GitHub Pages only from the last two. That asymmetry is deliberate:
+`WARN_AS_ERROR = FAIL_ON_WARNINGS` makes an undocumented function a *failed build*, so the check
+has to run before a merge rather than after one, while an unreviewed branch's documentation has no
+business on the published site.
+
+To get the same failure locally, before the `pre-push` hook does:
+
+```bash
+cmake --preset cpu-omp-release -DALTX_ENABLE_DOCS=ON
+cmake --build --preset cpu-omp-release --target docs
+```
+
+The site lands in `build/cpu-omp-release/docs/html`. Doxygen's warnings go to stderr rather than to
+a log file, so a failure is readable where it happened, in the terminal or in the CI log.
+
+@note The rule this enforces has a trap that is easy to trip and impossible to notice: Doxygen
+attributes a namespace-scope or global function to the **file** it was declared in, and ignores the
+documentation of such entities entirely unless that file carries a `@file` block. A header without
+one is not undocumented — it is invisible, and the check passes while enforcing nothing. Every
+header therefore opens with a `@file` comment.
 
 @section quality_upgrading Upgrading the hooks
 
