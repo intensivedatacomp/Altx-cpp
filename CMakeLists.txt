@@ -90,4 +90,8 @@ if(ALTX_ENABLE_TESTS)
     add_subdirectory(tests)
 endif()
 
+if(ALTX_ENABLE_DOCS)
+    add_subdirectory(docs)
+endif()
+
 altx_print_configuration_summary()

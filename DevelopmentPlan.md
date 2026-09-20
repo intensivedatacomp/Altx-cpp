@@ -1186,6 +1186,17 @@ set, `WARN_IF_UNDOCUMENTED` has no effect and the check appears to pass while en
 `FAIL_ON_WARNINGS` is preferred over plain `YES` because it completes the run before failing, so
 one push reports every missing comment rather than only the first.
 
+There is a **second trap, discovered while implementing `docs/Doxyfile.in`**, and it disables the
+same check just as completely: Doxygen attributes a namespace-scope or global function to the
+*file* it is declared in, and ignores the documentation of such entities unless that file carries a
+`@file` block. A header without one is not undocumented -- it is invisible. `WARN_IF_UNDOCUMENTED`
+and `WARN_NO_PARAMDOC` then have nothing to report about anything in it, and the run passes. It was
+verified on Doxygen 1.9.8 with a header holding an undocumented function and a `@param` naming an
+argument that does not exist: without a `@file` block the run is clean and exits 0; with one, both
+are reported and the run fails. **Every header therefore opens with a `@file` comment**, and that
+is a rule about the code rather than a setting, which is why it is written here as well as in the
+Doxyfile.
+
 A complementary check runs in CI, on the compiler rather than on Doxygen: **`-Wdocumentation` and
 `-Wdocumentation-pedantic`** (Clang) verify that a doc comment *agrees with the code* -- a
 `\param` naming an argument that does not exist, a documented return on a `void` function, a
@@ -1294,10 +1305,26 @@ only one source.
 | `build-test.yml`    | push to **any** branch, pull request, manual       | the preset matrix: configure, build, `ctest`, coverage   |
 | `nightly.yml`       | schedule                                           | sanitizers, GPU build, Trivy, benchmarks                 |
 | `release.yml`       | push of git tag `v*`                               | rebuild all, version tags, Trivy gating, GitHub release  |
-| `docs.yml`          | push to `main`, git tag                            | Doxygen to GitHub Pages                                  |
+| `docs.yml`          | push to `main` / `v*`, pull request, manual        | Doxygen; **builds** on all four, **publishes** to GitHub Pages only from `main` and a tag |
 
-`pre-commit.yml`, `docker-images.yml` and `build-test.yml` exist so far; the rest arrive with the
-code they test.
+`pre-commit.yml`, `docker-images.yml`, `build-test.yml` and `docs.yml` exist so far; the rest
+arrive with the code they test.
+
+The build-versus-publish split in `docs.yml` is a **revision of the original plan**, which had it
+run on a push to `main` and on a tag only. `WARN_AS_ERROR = FAIL_ON_WARNINGS` makes the
+documentation-coverage rule a *gate*, and a gate whose first run is after the merge is one that
+breaks `main` instead of protecting it. The `pre-push` hook covers the same ground locally, but
+only for somebody who installed it and did not reach for `--no-verify`, and not at all for a fork's
+pull request. Building on a pull request costs about a minute; publishing from one would put an
+unreviewed branch's documentation on the site, so the deployment job is gated on the ref rather
+than on the event -- a `workflow_dispatch` from a feature branch must not publish either.
+
+`build-test.yml` and `docs.yml` both run inside `dev-cpu` at the content hash resolved from the
+working tree, so the resolution lives in `.github/actions/resolve-image` rather than in either of
+them. The rule that no data flows between workflows -- only the guarantee that both compute the
+same name from the same tree -- holds exactly as long as there is one implementation to compute it
+with; two copies would be two answers to the question "which image is this tree's", and they would
+diverge silently, since each is only ever read in the workflow that owns it.
 
 Three decisions inside `build-test.yml` that the table does not show:
 
@@ -1526,11 +1553,22 @@ is far more expensive to rebuild than a `pip install`.
 ### Build documentation with Doxygen
 The HTML documentation of the code should be build automatically with Doxygen. The docker images should be scanned for vulnerabilities.
 
-Doxygen runs on every push to `main` and publishes to GitHub Pages. Warnings are errors, which is
-what makes the "every function and every argument is documented" rule of the
-[pre-commit section](#pre-commit) enforceable rather than aspirational. Note the
-`EXTRACT_ALL = NO` requirement documented there: with `EXTRACT_ALL = YES` the check silently
-enforces nothing.
+Doxygen runs on every pull request and on every push to `main` and to a release tag, and publishes
+to GitHub Pages from the last two only -- see the [workflow table](#workflows) for why the build
+and the publication are separated. Warnings are errors, which is what makes the "every function and
+every argument is documented" rule of the [pre-commit section](#pre-commit) enforceable rather than
+aspirational. Note the `EXTRACT_ALL = NO` requirement documented there, and the `@file` requirement
+beside it: either one missing makes the check silently enforce nothing.
+
+Two implementation notes that the settings alone do not convey. The Doxyfile is a `configure_file`
+template, and it is regenerated by `cmake/GenerateDoxyfile.cmake` **on every build of the `docs`
+target** rather than once at configure time, for exactly the reason the version header is
+(`cmake/Version.cmake`): `PROJECT_NUMBER` comes from `git describe`, and a commit on the current
+branch does not touch `.git/HEAD`, so a configure-time substitution would keep labelling the
+published site with whatever commit created the build directory. And `WARN_LOGFILE` is deliberately
+left blank: naming a file sends warnings there *instead of* to stderr, so a run that fails on
+`FAIL_ON_WARNINGS` would print nothing at all and the reason would have to be downloaded as an
+artefact.
 
 Prose documentation lives in `docs/` as Markdown carrying a Doxygen `@page` command, so it appears
 under "Related Pages" in the same HTML output as the API reference rather than as a second,

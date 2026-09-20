@@ -1,0 +1,78 @@
+name: Resolve development image
+description: >
+  Name the development image that matches this working tree, so that a
+  container job can run in the same toolchain the tree describes. Resolves the
+  content hash from docker/images.yaml and falls back to the moving `edge` tag
+  when that hash has not been published yet.
+
+  The caller must check the repository out first: the answer is computed from
+  docker/images.yaml by scripts/ci/images.py, both of which have to be on disk.
+
+# Two workflows need this and neither may own it. `build-test.yml` and
+# `docs.yml` both run inside `dev-cpu` at the tree's own content hash, and the
+# guarantee that makes that safe -- no data flows between workflows, only the
+# fact that both compute the same name from the same tree -- survives only for
+# as long as there is one implementation to compute it with. Two copies of the
+# resolver would be two answers to "which image is this tree's".
+inputs:
+  image:
+    description: The image key in docker/images.yaml to resolve, e.g. `dev-cpu`.
+    required: false
+    default: dev-cpu
+  token:
+    description: >
+      GHCR token, for the existence check below. A composite action has no
+      `secrets` context, so it must be passed in.
+    required: true
+
+outputs:
+  ref:
+    description: >
+      The image reference to run a container job in: the content hash when it
+      has been published, the moving tag otherwise.
+    value: ${{ steps.image.outputs.ref }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: '3.12'
+
+    # The resolver's only dependency. Not `uv` and not the repository's own
+    # pyproject.toml: this step runs on a bare runner, before any image is
+    # available, and one wheel is the entire requirement.
+    - shell: bash
+      run: pip install --quiet pyyaml
+
+    # Raises the anonymous pull limit on the existence check, and would keep
+    # this working if the packages were ever made private again.
+    - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.token }}
+
+    # The hash tag is the correct answer, and it is not always available: a
+    # pull request that edits docker/dev.Dockerfile changes the hash, and
+    # `docker-images.yml` may not have finished publishing it -- the two
+    # workflows are triggered together and GitHub orders neither against the
+    # other. Falling back to `edge` keeps the job honest about what it used
+    # rather than failing on a race, and the warning is what stops that from
+    # becoming the normal case unnoticed.
+    - id: image
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        ref=$(python3 scripts/ci/images.py ref "$IMAGE")
+        if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Development image::$ref"
+        else
+          fallback="ghcr.io/${GITHUB_REPOSITORY,,}/${IMAGE}:edge"
+          echo "ref=$fallback" >> "$GITHUB_OUTPUT"
+          echo "::warning title=Development image not published yet::$ref does not exist; falling back to $fallback. The job below does not match this tree's dev image."
+        fi
