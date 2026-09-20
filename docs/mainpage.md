@@ -11,7 +11,7 @@ Adaptive Law-Based Transformation turns a labelled collection of time series int
 feature vector per instance, in two phases.
 
 **Training** slides a window over every channel of every instance and embeds each window into a
-symmetric `l × l` matrix. The eigenvector belonging to the smallest *absolute* eigenvalue of that
+symmetric @f$ l \times l @f$ matrix. The eigenvector belonging to the smallest *absolute* eigenvalue of that
 matrix is kept as a **law** — the linear relation the window most nearly satisfies. A training run
 is millions of independent tiny eigenproblems, and the laws it produces are the model.
 
