@@ -1186,6 +1186,17 @@ set, `WARN_IF_UNDOCUMENTED` has no effect and the check appears to pass while en
 `FAIL_ON_WARNINGS` is preferred over plain `YES` because it completes the run before failing, so
 one push reports every missing comment rather than only the first.
 
+There is a **second trap, discovered while implementing `docs/Doxyfile.in`**, and it disables the
+same check just as completely: Doxygen attributes a namespace-scope or global function to the
+*file* it is declared in, and ignores the documentation of such entities unless that file carries a
+`@file` block. A header without one is not undocumented -- it is invisible. `WARN_IF_UNDOCUMENTED`
+and `WARN_NO_PARAMDOC` then have nothing to report about anything in it, and the run passes. It was
+verified on Doxygen 1.9.8 with a header holding an undocumented function and a `@param` naming an
+argument that does not exist: without a `@file` block the run is clean and exits 0; with one, both
+are reported and the run fails. **Every header therefore opens with a `@file` comment**, and that
+is a rule about the code rather than a setting, which is why it is written here as well as in the
+Doxyfile.
+
 A complementary check runs in CI, on the compiler rather than on Doxygen: **`-Wdocumentation` and
 `-Wdocumentation-pedantic`** (Clang) verify that a doc comment *agrees with the code* -- a
 `\param` naming an argument that does not exist, a documented return on a `void` function, a
