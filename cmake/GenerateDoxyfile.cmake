@@ -16,6 +16,7 @@
 #   -DALTX_DOXYFILE_INPUT=       docs/Doxyfile.in
 #   -DALTX_DOXYFILE_OUTPUT=      the Doxyfile to write
 #   -DALTX_DOXYGEN_OUTPUT_DIR=   where doxygen writes html/
+#   -DALTX_DOXYGEN_AWESOME_DIR=  the fetched doxygen-awesome-css checkout
 #   -DALTX_PROJECT_NAME=         PROJECT_NAME, from the top-level project()
 #   -DALTX_PROJECT_DESCRIPTION=  PROJECT_DESCRIPTION, likewise
 #   -DALTX_HAVE_DOT=             whether graphviz was found
