@@ -79,10 +79,23 @@ jobs:
           # already been reviewed and merged.
           SKIP: no-commit-to-branch
 
-      # The pre-push tier is empty today; Doxygen's documentation-coverage check
-      # goes here, because it needs the whole tree but no configured build. It
-      # is run separately because `default_stages: [pre-commit]` means the step
-      # above does not pick it up -- and a check only a local `git push` enforces
-      # is one that `--no-verify` disables for good.
+      # Run separately because `default_stages: [pre-commit]` means the step above
+      # does not pick this tier up.
       - name: Run the push-stage hooks
         run: pre-commit run --all-files --hook-stage pre-push --show-diff-on-failure --color=always
+        env:
+          # The tier holds one hook, `doxygen`, and it cannot run here. It needs
+          # doxygen, graphviz and CMake, and this job has no container by
+          # design -- see the header. What makes that safe for every other hook
+          # is that each supplies its own tool at a pinned version; doxygen
+          # cannot be pinned that way, and whatever doxygen an Ubuntu runner
+          # happens to carry is not necessarily the one dev-cpu does, while
+          # `WARN_AS_ERROR`, `MARKDOWN_ID_STYLE` and `HTML_COLORSTYLE` in
+          # docs/Doxyfile.in are all version-sensitive. Installing it here would
+          # buy a second, differently-versioned opinion about the same tree.
+          #
+          # So it is not skipped in the sense of unenforced: docs.yml runs the
+          # same `scripts/ci/docs.sh` inside dev-cpu on every pull request and
+          # every push to `main` or a tag. This step stays because the tier is
+          # where a future whole-tree hook goes that a bare runner *can* run.
+          SKIP: doxygen

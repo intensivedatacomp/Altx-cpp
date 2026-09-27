@@ -1087,6 +1087,16 @@ would make `git push` trigger a full rebuild. That preset also sets `ALTX_ENABLE
 pushing does not require GoogleTest, and hence does not require the network once
 doxygen-awesome-css is populated.
 
+In CI that hook is **skipped** in `pre-commit.yml` and enforced by `docs.yml` instead. The reason is
+the no-container rule that workflow is built on: every other hook supplies its own tool at a pinned
+version, which is what lets a bare runner agree with the image, and doxygen is the one tool that
+cannot be pinned that way. Whatever doxygen an Ubuntu runner ships need not be the one `dev-cpu`
+ships, while `WARN_AS_ERROR`, `MARKDOWN_ID_STYLE` and `HTML_COLORSTYLE` are all version-sensitive --
+so installing it there would buy a second, differently-versioned opinion about the same tree rather
+than a second check. `docs.yml` runs the same script inside the image on every pull request, so
+nothing is lost; the push-stage step in `pre-commit.yml` stays for the next whole-tree hook that a
+bare runner can actually run.
+
 The one thing to know about running it by hand is that `pre-commit run --all-files` does **not**
 include it: `default_stages: [pre-commit]` means the commit tier only, and the push tier needs
 `pre-commit run --hook-stage pre-push --all-files`. A clean `--all-files` run therefore says nothing
