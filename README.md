@@ -45,10 +45,11 @@ ctest --preset cpu-omp-debug          # run the tests
 
 A preset is the unit of build, and each one corresponds to a Docker image:
 `cpu-serial-debug` and `cpu-omp-debug` (sanitizers on) for development, `cpu-serial-release` and
-`cpu-omp-release` for what `runtime-cpu` ships, and `coverage` for gcov. `cmake --list-presets`
-prints them with a description each. The MPI and HIP presets arrive with the code that needs them.
+`cpu-omp-release` for what `runtime-cpu` ships, `coverage` for gcov and `docs` for Doxygen.
+`cmake --list-presets` prints them with a description each. The MPI and HIP presets arrive with the
+code that needs them.
 
-The build options are `ALTX_ENABLE_{OPENMP,MPI,HIP,TESTS,COVERAGE}`, `ALTX_SCALAR`
+The build options are `ALTX_ENABLE_{OPENMP,MPI,HIP,TESTS,COVERAGE,DOCS}`, `ALTX_SCALAR`
 (`double` or `float`), `ALTX_SANITIZERS`, `ALTX_WERROR` and `ALTX_NATIVE_ARCH`; a configure prints
 the resolved set. The first configure downloads GoogleTest, so it needs the network unless
 `ALTX_ENABLE_TESTS=OFF`.
@@ -63,6 +64,15 @@ scripts/ci/coverage.sh          # inside dev-cpu, which has lcov and genhtml
 ```
 
 CI runs the same script, so a number that looks wrong there reproduces here in one command.
+
+The documentation, with the site in `build/doxygen/docs/html/`:
+
+```bash
+scripts/ci/docs.sh              # inside dev-cpu, which has doxygen and graphviz
+```
+
+An undocumented function or a `@param` naming an argument that does not exist fails this, which is
+why it is also the `pre-push` hook and why the same script is what CI runs.
 
 ## Contributing
 

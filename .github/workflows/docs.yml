@@ -89,14 +89,13 @@ jobs:
       # a site labelled `unknown`; see cmake/GitVersion.cmake, which warns.
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Configure
-        run: cmake --preset cpu-omp-release -DALTX_ENABLE_DOCS=ON
-
-      # Doxygen writes its warnings to stderr, so a failure here is readable in
-      # this log rather than in an artefact; see WARN_LOGFILE in
-      # docs/Doxyfile.in.
-      - name: Build
-        run: cmake --build --preset cpu-omp-release --target docs
+      # The same script the `doxygen` pre-push hook runs, so a failure here is
+      # one a developer reproduces in a single command rather than by
+      # reconstructing a workflow's cmake lines. Doxygen writes its warnings to
+      # stderr, so the reason is in this log rather than in an artefact; see
+      # WARN_LOGFILE in docs/Doxyfile.in.
+      - name: Build the documentation
+        run: scripts/ci/docs.sh
 
       # `upload-pages-artifact`, not `upload-artifact`: `deploy-pages` deploys
       # one specific artefact, named `github-pages`, in the specific shape this
@@ -107,7 +106,7 @@ jobs:
       # real one.
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: build/cpu-omp-release/docs/html
+          path: build/doxygen/docs/html
 
   deploy:
     needs: build

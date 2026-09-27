@@ -87,6 +87,17 @@
                 "ALTX_ENABLE_OPENMP": "ON",
                 "ALTX_ENABLE_COVERAGE": "ON"
             }
+        },
+        {
+            "name": "doxygen",
+            "inherits": "release",
+            "displayName": "Doxygen documentation only",
+            "description": "Image dev-cpu. Its own build directory so the documentation check never disturbs a code build directory's cache; compiles nothing, so OpenMP and the tests are off and GoogleTest is not fetched.",
+            "cacheVariables": {
+                "ALTX_ENABLE_DOCS": "ON",
+                "ALTX_ENABLE_OPENMP": "OFF",
+                "ALTX_ENABLE_TESTS": "OFF"
+            }
         }
     ],
     "buildPresets": [
@@ -109,6 +120,11 @@
         {
             "name": "coverage",
             "configurePreset": "coverage"
+        },
+        {
+            "name": "doxygen",
+            "configurePreset": "doxygen",
+            "targets": ["docs"]
         }
     ],
     "testPresets": [

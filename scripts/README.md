@@ -105,6 +105,25 @@ inside `dev-cpu`, which has lcov. It calls `coverage_badge.py`, which turns a tr
 percentage and an SVG without any network access:
 `scripts/ci/coverage_badge.py --info coverage/coverage.info --output .badges/coverage.svg`.
 
+### `scripts/ci/docs.sh` — the documentation, and the documentation-coverage check
+
+```bash
+scripts/ci/docs.sh                    # configure and build; site under build/doxygen/docs/html/
+scripts/ci/docs.sh --skip-configure   # reuse an existing build directory
+scripts/ci/docs.sh --preset cpu-omp-release   # the documentation of another preset
+```
+
+Builds the `docs` target with Doxygen and exits non-zero on any Doxygen warning, which is what makes
+"every function and every argument is documented" a check rather than a wish — `EXTRACT_ALL = NO`
+and `WARN_AS_ERROR = FAIL_ON_WARNINGS` in `docs/Doxyfile.in`. Warnings go to stderr, so the reason
+for a failure is in the terminal.
+
+This is the `doxygen` pre-push hook and the build step of `.github/workflows/docs.yml`, so all three
+pass and fail together. Run it inside `dev-cpu`, which has doxygen and graphviz; it says so if
+either is missing. The `doxygen` preset it uses has a build directory of its own and configures with
+the tests off, so it neither disturbs the cache of a directory you are compiling in nor needs
+GoogleTest.
+
 ### `scripts/ci/images.py` — the image matrix
 
 ```bash

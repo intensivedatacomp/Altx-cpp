@@ -484,6 +484,7 @@ built in, so a configuration that CI builds is always a configuration a develope
 | `gpu-hip-mpi-release` | `runtime-gpu`     | ON     | ON  | ON  | Release             |
 | `*-debug`             | `dev-*`           | as above     |     |     | Debug + sanitizers  |
 | `coverage`            | `dev-cpu`         | ON     | OFF | OFF | Debug + gcov        |
+| `doxygen`             | `dev-cpu`         | OFF    | OFF | OFF | Release, Doxygen only |
 
 ### Library choices
 
@@ -1075,6 +1076,32 @@ Doxygen sits between the two: it needs no build, but it must see the whole tree,
 for every commit and belongs at `pre-push`. `pre-commit` supports this directly with
 `stages: [pre-push]`, so it is still one configuration file and one tool.
 
+That hook exists, as `doxygen`, and it is the only occupant of the tier. It runs
+`scripts/ci/docs.sh`, which `.github/workflows/docs.yml` also runs, so the local check and the CI
+check cannot drift apart -- the argument `scripts/ci/coverage.sh` already makes for coverage. Two
+details are load-bearing. It needs `pass_filenames: false` **and** `always_run: true`: the check is
+of the tree as a whole rather than of a file list, and a push touching no C++ still has to run it.
+And the script configures the **`doxygen` preset**, which exists so that the hook has a build
+directory of its own -- a hook that rewrote the cache of the directory a developer is compiling in
+would make `git push` trigger a full rebuild. That preset also sets `ALTX_ENABLE_TESTS=OFF`, so
+pushing does not require GoogleTest, and hence does not require the network once
+doxygen-awesome-css is populated.
+
+In CI that hook is **skipped** in `pre-commit.yml` and enforced by `docs.yml` instead. The reason is
+the no-container rule that workflow is built on: every other hook supplies its own tool at a pinned
+version, which is what lets a bare runner agree with the image, and doxygen is the one tool that
+cannot be pinned that way. Whatever doxygen an Ubuntu runner ships need not be the one `dev-cpu`
+ships, while `WARN_AS_ERROR`, `MARKDOWN_ID_STYLE` and `HTML_COLORSTYLE` are all version-sensitive --
+so installing it there would buy a second, differently-versioned opinion about the same tree rather
+than a second check. `docs.yml` runs the same script inside the image on every pull request, so
+nothing is lost; the push-stage step in `pre-commit.yml` stays for the next whole-tree hook that a
+bare runner can actually run.
+
+The one thing to know about running it by hand is that `pre-commit run --all-files` does **not**
+include it: `default_stages: [pre-commit]` means the commit tier only, and the push tier needs
+`pre-commit run --hook-stage pre-push --all-files`. A clean `--all-files` run therefore says nothing
+about documentation coverage, which is exactly the kind of false reassurance worth writing down.
+
 ### Hooks
 
 Carried over from the Python repository: `trailing-whitespace`, `end-of-file-fixer`, `check-yaml`,
@@ -1555,7 +1582,9 @@ The HTML documentation of the code should be build automatically with Doxygen. T
 
 Doxygen runs on every pull request and on every push to `main` and to a release tag, and publishes
 to GitHub Pages from the last two only -- see the [workflow table](#workflows) for why the build
-and the publication are separated. Warnings are errors, which is what makes the "every function and
+and the publication are separated. The workflow's build step is `scripts/ci/docs.sh`, which is also
+the `doxygen` pre-push hook, so the gate a developer meets locally and the gate a pull request meets
+are the same command. Warnings are errors, which is what makes the "every function and
 every argument is documented" rule of the [pre-commit section](#pre-commit) enforceable rather than
 aspirational. Note the `EXTRACT_ALL = NO` requirement documented there, and the `@file` requirement
 beside it: either one missing makes the check silently enforce nothing.
@@ -1569,6 +1598,65 @@ published site with whatever commit created the build directory. And `WARN_LOGFI
 left blank: naming a file sends warnings there *instead of* to stderr, so a run that fails on
 `FAIL_ON_WARNINGS` would print nothing at all and the reason would have to be downloaded as an
 artefact.
+
+The site is styled with **doxygen-awesome-css**, fetched by `docs/CMakeLists.txt` and pinned to a
+commit rather than to a tag -- a tag can be moved, and the appearance of the published site should
+not change because an upstream maintainer retagged. It is a stylesheet and not a library: the
+repository ships no `CMakeLists.txt`, so `FetchContent_MakeAvailable` populates it and calls no
+`add_subdirectory`, nothing is compiled, and nothing of it reaches the install tree. It is attached
+with `HTML_EXTRA_STYLESHEET`, which *appends* to Doxygen's own stylesheet, rather than with the
+deprecated `HTML_STYLESHEET`, which replaces it and therefore breaks on every Doxygen upgrade. The
+cost is that `ALTX_ENABLE_DOCS=ON` now needs the network at configure time, exactly as
+`ALTX_ENABLE_TESTS` does for GoogleTest, with the same `FETCHCONTENT_SOURCE_DIR_…` escape hatch.
+
+The theme is **four settings, not one**: `HTML_EXTRA_STYLESHEET` selects it, and `DISABLE_INDEX =
+NO`, `GENERATE_TREEVIEW = YES` and `FULL_SIDEBAR = NO` select the layout it is written for. The
+Doxyfile comment above `DISABLE_INDEX` suggests setting it to `YES` when a treeview exists; doing so
+silently switches to the theme's *sidebar-only* variant, which needs `FULL_SIDEBAR = YES` and a
+second stylesheet as well, and looks broken without them.
+
+`HTML_COLORSTYLE = LIGHT` is a **requirement of the theme on Doxygen 1.9.5 and newer, not a
+preference**, and the reason is worth recording because the failure is a plausible-looking page
+rather than an error. Doxygen implements its colour styles by rewriting literal colour values
+throughout the generated `doxygen.css`: between a `LIGHT` and a `DARK` run of this project's
+Doxyfile, 466 lines of that file differ and **not one of them is a custom-property declaration**.
+So the theme cannot override them through the cascade the way it overrides its own variables. The
+result of combining them is not a dark site but a half-recoloured one -- Doxygen's dark literals
+wherever the theme does not restyle, the theme's light values wherever it does.
+
+`LIGHT` does not mean the site is always light. `doxygen-awesome.css` carries its own
+`prefers-color-scheme: dark` block, so a reader whose browser or desktop is in dark mode gets the
+theme's dark palette, which is designed rather than derived from a hue rotation. The setting decides
+*which stylesheet owns the decision*, not which colours a reader sees. A **manual** toggle is the
+one part deliberately not taken: it requires a custom `HTML_HEADER`, and a header generated by
+`doxygen -w` is coupled to the version that produced it, so a Doxygen upgrade can render it subtly
+wrong in a file nobody remembers is generated. Following the reader's system preference costs
+nothing and cannot rot.
+
+Three of the theme's optional extensions *are* taken: a **copy-to-clipboard button on every code
+fragment**, which matters for pages that are mostly commands; an **interactive table of contents**
+that follows the reader's position, which matters for pages long enough to need one; and a
+**permanent-link anchor on every heading**, so a section of a page can be cited rather than
+described. Their appearance is already in `doxygen-awesome.css`; only the scripts are missing, and
+one of them -- the interactive table of contents -- silently needs `GENERATE_TREEVIEW = YES`, which
+the theme's layout already requires, because it attaches its scroll handler to an element no other
+layout produces. Doxygen 1.9.8 has no `HTML_EXTRA_SCRIPT` to match `HTML_EXTRA_STYLESHEET`, so
+JavaScript can reach the page only through
+`HTML_HEADER` or `HTML_FOOTER`. Both are coupled to the Doxygen version that generated them, so the
+choice is which one to own: the footer is fifteen lines of navigation path, the header is
+seventy-four lines of stylesheet links, treeview and MathJax bootstrap. `docs/footer.html` is
+therefore the one file in this setup that is generated *and* committed; it records the version it
+came from, and a Doxygen upgrade means regenerating it and re-applying the script block. The scripts
+themselves travel through `HTML_EXTRA_FILES` rather than a CDN, so the site has no run-time
+dependency beyond MathJax, which is one because vendoring a TeX renderer is a different order of
+size.
+
+Two things about that file are worth knowing before editing it, both learned the hard way: Doxygen
+copies the footer's HTML comment into **every** generated page, and it expands its own
+`$`-markers inside comments as well as outside them. A comment there explaining what `$navpath` and
+`$generatedby` are therefore publishes itself on every page *and* rewrites itself into nonsense on
+the way. The reasoning lives in `docs/Doxyfile.in` under `HTML_FOOTER`; the footer carries a pointer
+to it and nothing more.
 
 Prose documentation lives in `docs/` as Markdown carrying a Doxygen `@page` command, so it appears
 under "Related Pages" in the same HTML output as the API reference rather than as a second,

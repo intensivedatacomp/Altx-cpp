@@ -42,16 +42,18 @@ it can live without making commits slow or unreliable.
 
 | Tier         | Requirement                    | Checks                                            |
 | ------------ | ------------------------------ | ------------------------------------------------- |
-| `pre-commit` | nothing but the changed files  | everything in @ref quality_checks                  |
-| `pre-push`   | the whole tree, still local    | Doxygen documentation coverage — not yet written   |
+| `pre-commit` | nothing but the changed files  | everything in @ref quality_checks                 |
+| `pre-push`   | the whole tree, still local    | @ref quality_pre_push "Doxygen documentation coverage" |
 | CI           | a **configured build**         | the preset matrix, `ctest`, coverage, @ref quality_ci_docs "Doxygen"; clang-tidy and `-Wdocumentation` still to come |
 
 clang-tidy is deliberately *not* a commit hook: it needs `compile_commands.json`, which exists only
 after CMake has configured a build directory. A hook that silently skips when that file is missing
 gives different results to different developers, which is worse than not having the check at all.
 
-The first two tiers also run in CI — see @ref quality_ci. `pre-commit install` is per-clone and
-`--no-verify` bypasses it, so the local hooks are a fast path, not the enforcement point.
+Every tier also runs in CI — see @ref quality_ci — because `pre-commit install` is per-clone and
+`--no-verify` bypasses it, so the local hooks are a fast path and not the enforcement point. The
+`pre-push` tier is the exception to *how*: it is enforced by @ref quality_ci_docs rather than by the
+pre-commit job, which has no container and therefore no doxygen.
 
 The tiers are kept disjoint. `default_stages: [pre-commit]` in `.pre-commit-config.yaml` means a
 hook runs at commit time only, unless it explicitly says `stages: [pre-push]`.
@@ -192,6 +194,40 @@ and those are exactly the files where a mistake stays invisible until CI runs.
 `types_or: [python, pyi, jupyter]` and ruff reads `.ipynb` natively, so a wrapper would report the
 same findings twice. mypy has no notebook support, which is the one real gap `nbqa` fills.
 
+@section quality_pre_push The pre-push hook
+
+One hook occupies the `pre-push` tier: **Doxygen documentation coverage**. It runs on `git push`
+rather than on `git commit` because it needs to see the whole tree — deleting a documented function
+breaks an `@ref` in a file the commit never mentions — and reading every file is too slow to pay for
+on each commit.
+
+```bash
+scripts/ci/docs.sh                                  # what the hook runs, and what CI runs
+pre-commit run --hook-stage pre-push --all-files    # through pre-commit, as `git push` does
+```
+
+The second form is worth knowing: a plain `pre-commit run --all-files` runs the commit tier only, so
+it reports nothing about this check however clean it looks.
+
+It fails on any Doxygen warning: an undocumented function, an undocumented parameter, a `@param`
+naming an argument that does not exist. That is `EXTRACT_ALL = NO` together with
+`WARN_AS_ERROR = FAIL_ON_WARNINGS` in `docs/Doxyfile.in`, and the first of those is load-bearing —
+with `EXTRACT_ALL = YES` the check passes while enforcing nothing.
+
+The `doxygen` CMake preset it configures has a build directory of its own, so the hook never
+rewrites the cache of a directory you are compiling in, and it configures with the tests off so that
+pushing does not require GoogleTest.
+
+@note The rule has a trap that is easy to trip and impossible to notice: Doxygen attributes a
+namespace-scope or global function to the **file** it was declared in, and ignores the documentation
+of such entities entirely unless that file carries a `@file` block. A header without one is not
+undocumented — it is invisible, and the check passes while enforcing nothing. Every header therefore
+opens with a `@file` comment.
+
+@note Doxygen and graphviz live in `dev-cpu`, so the hook works there — the documented way to run
+these hooks, see @ref quality_container. Outside it, the script says which tool is missing instead
+of failing with `doxygen: command not found` in the middle of a push.
+
 @section quality_config Where the configuration lives
 
 | File                      | Configures                                            |
@@ -294,11 +330,18 @@ rather than deduplicated: `pull_request` runs against the merge of head into bas
 actually land — while `push` runs against the branch as written. Superseded runs of the *same*
 event are cancelled, so a rapid series of pushes leaves one standing.
 
-`no-commit-to-branch` is skipped there, via `SKIP=no-commit-to-branch`. It is a statement about the
-branch a developer is working on, and the one place it would fire in CI is the push event *on*
-`main` — after the pull request carrying the change has already been reviewed and merged. On a
-feature branch it passes anyway, and on a pull request `actions/checkout` leaves a detached HEAD,
-so there is no branch for it to object to.
+Two hooks are skipped there. `no-commit-to-branch` is a statement about the branch a developer is
+working on, and the one place it would fire in CI is the push event *on* `main` — after the pull
+request carrying the change has already been reviewed and merged. On a feature branch it passes
+anyway, and on a pull request `actions/checkout` leaves a detached HEAD, so there is no branch for it
+to object to.
+
+`doxygen` is skipped for the reason the `@note` below gives: this job has no container, and doxygen
+is the one tool in the configuration that cannot be pinned by the hook itself. Whatever doxygen a
+runner happens to carry need not be the one `dev-cpu` carries, and `WARN_AS_ERROR`,
+`MARKDOWN_ID_STYLE` and `HTML_COLORSTYLE` are all version-sensitive — installing it here would buy a
+second, differently-versioned opinion about the same tree. The check is not unenforced: it runs in
+@ref quality_ci_docs, inside `dev-cpu`, on the same `scripts/ci/docs.sh` the hook runs.
 
 @note The job does **not** run inside `dev-cpu`, and does not need to. Every hook supplies its own
 tool at a pinned version: `clang-format` is a `language: python` hook that installs the pinned
@@ -356,21 +399,10 @@ publishes to GitHub Pages only from the last two. That asymmetry is deliberate:
 has to run before a merge rather than after one, while an unreviewed branch's documentation has no
 business on the published site.
 
-To get the same failure locally, before the `pre-push` hook does:
-
-```bash
-cmake --preset cpu-omp-release -DALTX_ENABLE_DOCS=ON
-cmake --build --preset cpu-omp-release --target docs
-```
-
-The site lands in `build/cpu-omp-release/docs/html`. Doxygen's warnings go to stderr rather than to
-a log file, so a failure is readable where it happened, in the terminal or in the CI log.
-
-@note The rule this enforces has a trap that is easy to trip and impossible to notice: Doxygen
-attributes a namespace-scope or global function to the **file** it was declared in, and ignores the
-documentation of such entities entirely unless that file carries a `@file` block. A header without
-one is not undocumented — it is invisible, and the check passes while enforcing nothing. Every
-header therefore opens with a `@file` comment.
+The job runs `scripts/ci/docs.sh` — the same script the `pre-push` hook runs, so the three cannot
+disagree. See @ref quality_pre_push for what that means locally. Doxygen's warnings go to stderr
+rather than to a log file, so a failure is readable where it happened, in the terminal or in the CI
+log.
 
 @section quality_upgrading Upgrading the hooks
 

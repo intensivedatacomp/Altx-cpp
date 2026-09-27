@@ -14,6 +14,40 @@
 # and docker/dev.Dockerfile installs graphviz alongside doxygen.
 find_package(Doxygen REQUIRED dot)
 
+# ---------------------------------------------------------------------------
+# doxygen-awesome-css
+# ---------------------------------------------------------------------------
+#
+# A stylesheet, not a library. The repository ships no CMakeLists.txt, so
+# `FetchContent_MakeAvailable` populates it and calls no `add_subdirectory`:
+# nothing is configured, nothing is compiled, and nothing of it reaches this
+# project's install tree. The only output that matters is the source directory,
+# which becomes Doxygen's HTML_EXTRA_STYLESHEET.
+#
+# Pinned to a commit rather than to a tag, for the reason
+# cmake/Dependencies.cmake gives for GoogleTest: a tag can be moved, and the
+# appearance of the published site should not change because an upstream
+# maintainer retagged.
+#
+# This is the one step of a documentation configure that needs the network, and
+# it is the reason ALTX_ENABLE_DOCS stays OFF by default rather than following
+# whether doxygen happens to be installed. An offline configure needs
+# `-DFETCHCONTENT_SOURCE_DIR_DOXYGEN_AWESOME_CSS=<path to a checkout>`.
+include(FetchContent)
+
+FetchContent_Declare(
+    doxygen_awesome_css
+    GIT_REPOSITORY https://github.com/jothepro/doxygen-awesome-css.git
+    # v2.5.0
+    GIT_TAG 46483f1e5a70ffb9ecd3b82d0a1cd1b24edf13da
+)
+FetchContent_MakeAvailable(doxygen_awesome_css)
+
+# The theme is three settings in the Doxyfile, not one: HTML_EXTRA_STYLESHEET
+# selects it, and DISABLE_INDEX / GENERATE_TREEVIEW / FULL_SIDEBAR select the
+# layout it is written for. All four are commented there.
+set(ALTX_DOXYGEN_AWESOME_DIR "${doxygen_awesome_css_SOURCE_DIR}")
+
 set(ALTX_DOXYFILE_INPUT "${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile.in")
 
 # Both generated, so both under the build directory. A Doxyfile written next to
@@ -40,6 +74,7 @@ add_custom_target(
         "-DALTX_DOXYFILE_INPUT=${ALTX_DOXYFILE_INPUT}"
         "-DALTX_DOXYFILE_OUTPUT=${ALTX_DOXYFILE}"
         "-DALTX_DOXYGEN_OUTPUT_DIR=${ALTX_DOXYGEN_OUTPUT_DIR}"
+        "-DALTX_DOXYGEN_AWESOME_DIR=${ALTX_DOXYGEN_AWESOME_DIR}"
         "-DALTX_PROJECT_NAME=${PROJECT_NAME}"
         "-DALTX_PROJECT_DESCRIPTION=${PROJECT_DESCRIPTION}"
         # `Doxygen_dot_FOUND`, not `DOXYGEN_DOT_FOUND`: the latter is what
