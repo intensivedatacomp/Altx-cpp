@@ -484,6 +484,7 @@ built in, so a configuration that CI builds is always a configuration a develope
 | `gpu-hip-mpi-release` | `runtime-gpu`     | ON     | ON  | ON  | Release             |
 | `*-debug`             | `dev-*`           | as above     |     |     | Debug + sanitizers  |
 | `coverage`            | `dev-cpu`         | ON     | OFF | OFF | Debug + gcov        |
+| `doxygen`             | `dev-cpu`         | OFF    | OFF | OFF | Release, Doxygen only |
 
 ### Library choices
 
@@ -1075,6 +1076,22 @@ Doxygen sits between the two: it needs no build, but it must see the whole tree,
 for every commit and belongs at `pre-push`. `pre-commit` supports this directly with
 `stages: [pre-push]`, so it is still one configuration file and one tool.
 
+That hook exists, as `doxygen`, and it is the only occupant of the tier. It runs
+`scripts/ci/docs.sh`, which `.github/workflows/docs.yml` also runs, so the local check and the CI
+check cannot drift apart -- the argument `scripts/ci/coverage.sh` already makes for coverage. Two
+details are load-bearing. It needs `pass_filenames: false` **and** `always_run: true`: the check is
+of the tree as a whole rather than of a file list, and a push touching no C++ still has to run it.
+And the script configures the **`doxygen` preset**, which exists so that the hook has a build
+directory of its own -- a hook that rewrote the cache of the directory a developer is compiling in
+would make `git push` trigger a full rebuild. That preset also sets `ALTX_ENABLE_TESTS=OFF`, so
+pushing does not require GoogleTest, and hence does not require the network once
+doxygen-awesome-css is populated.
+
+The one thing to know about running it by hand is that `pre-commit run --all-files` does **not**
+include it: `default_stages: [pre-commit]` means the commit tier only, and the push tier needs
+`pre-commit run --hook-stage pre-push --all-files`. A clean `--all-files` run therefore says nothing
+about documentation coverage, which is exactly the kind of false reassurance worth writing down.
+
 ### Hooks
 
 Carried over from the Python repository: `trailing-whitespace`, `end-of-file-fixer`, `check-yaml`,
@@ -1555,7 +1572,9 @@ The HTML documentation of the code should be build automatically with Doxygen. T
 
 Doxygen runs on every pull request and on every push to `main` and to a release tag, and publishes
 to GitHub Pages from the last two only -- see the [workflow table](#workflows) for why the build
-and the publication are separated. Warnings are errors, which is what makes the "every function and
+and the publication are separated. The workflow's build step is `scripts/ci/docs.sh`, which is also
+the `doxygen` pre-push hook, so the gate a developer meets locally and the gate a pull request meets
+are the same command. Warnings are errors, which is what makes the "every function and
 every argument is documented" rule of the [pre-commit section](#pre-commit) enforceable rather than
 aspirational. Note the `EXTRACT_ALL = NO` requirement documented there, and the `@file` requirement
 beside it: either one missing makes the check silently enforce nothing.

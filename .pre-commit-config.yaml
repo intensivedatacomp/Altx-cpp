@@ -6,8 +6,10 @@
 
 # Installs both git hooks from one `pre-commit install`, so a checkout does not
 # have to remember `--hook-type pre-push` for the checks that need the whole
-# tree. Nothing is staged at `pre-push` yet; the Doxygen documentation-coverage
-# hook goes there, per the plan's three-tier split.
+# tree. `doxygen` below is the one hook in that tier, per the plan's three-tier
+# split: it sees every file whether or not the push touches it, which is the
+# whole point -- deleting a documented function breaks the `@ref` in a file the
+# commit never mentions.
 default_install_hook_types: [pre-commit, pre-push]
 
 # The tiers are meant to be disjoint: without this, a hook with no `stages:` key
@@ -77,6 +79,26 @@ repos:
         entry: python3 scripts/check_omp_braces.py
         language: system
         types_or: [c, c++, cuda]
+
+      # The pre-push tier, and the only hook in it. Doxygen needs no compiled
+      # build -- unlike clang-tidy, which is why that one is a CI job -- but it
+      # must see the whole tree, which makes it too slow for a commit.
+      #
+      # `pass_filenames: false` and `always_run: true` together: the check is of
+      # the tree as a whole, not of a file list, and a push that happens to touch
+      # no C++ still has to run it. The script is what CI calls, so a failure
+      # here is the failure the pull request would have reported.
+      #
+      # It needs doxygen and graphviz, so it works inside dev-cpu -- the
+      # documented way to run these hooks. The script says so rather than
+      # failing with `doxygen: command not found`.
+      - id: doxygen
+        name: Doxygen documentation coverage
+        entry: scripts/ci/docs.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
 
   # --- gersemi (CMake formatting) ---
   # No CMakeLists.txt exists yet -- stage 2 writes the first one. Configured now
