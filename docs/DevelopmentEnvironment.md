@@ -475,6 +475,7 @@ it; later ones are immediate.
 | `workspaceFolder`, `workspaceMount` | `/workspace`, the same path the Vim workflow mounts at, so `~/.config/clangd/config.yaml` and every documented command mean the same thing in both. |
 | `remoteUser`, `updateRemoteUserUID` | Run as `non_root` and rewrite its uid to match yours, so files created in the mounted repository are not owned by someone else. This is the automatic version of the `--build-arg UID=…` rebuild described above. |
 | `overrideCommand` | The image's `ENTRYPOINT` is `bash` with no `CMD`, so the container would exit the moment it started. |
+| `postCreateCommand` | Configures `cpu-omp-debug`, the build directory `.clangd` names. Without it clangd finds no `compile_commands.json` and falls back to the image's guessed flags, which know neither `src/` nor GoogleTest: `"core/…"` includes, `gtest/gtest.h` and the `altx` namespace all go unresolved. It only configures; the first build is still yours. |
 | `clangd.arguments` | The same five flags as `docker/vim/vimrc`, `--query-driver` included. Divergence here shows up as one editor being right about `libstdc++` and the other not. |
 | `C_Cpp.intelliSenseEngine: disabled` | If the Microsoft C/C++ extension is installed as well, its own parser competes with clangd and reports a second, different set of diagnostics. clangd is the one this project configures. |
 
@@ -494,6 +495,8 @@ not commit that, since it does not exist on anyone else's machine.
 | Every line red, `bits/c++config.h` not found          | clangd started without `--query-driver`                       |
 | `omp.h` not found, but `g++` compiles fine            | `libomp-18-dev` missing: clang does not search GCC's headers  |
 | Completion works in one file, not another             | That file has no `compile_commands.json` entry — reconfigure  |
+| `gtest/gtest.h`, `"core/…"` and `altx` unresolved, but the build works | `build/cpu-omp-debug` was never configured *inside the container* — run `cmake --preset cpu-omp-debug` there, then *clangd: Restart language server* |
+| `CMakeCache.txt directory … is different` on configure | That build directory was configured on the host, whose paths are not `/workspace` — delete it, or keep host and container builds in different presets |
 | No completion in `:term`                              | `$SHELL` not exported, so the terminal is running dash        |
 | Files in the repository owned by the wrong user       | Image built with a `UID`/`GID` that is not yours              |
 | A CPU build pulling gigabytes of ROCm                 | `docker-buildx` not installed; legacy builder resolves all stages |

@@ -6,6 +6,7 @@
     "remoteUser": "non_root",
     "updateRemoteUserUID": true,
     "overrideCommand": true,
+    "postCreateCommand": "cmake --preset cpu-omp-debug",
     "customizations": {
         "vscode": {
             "extensions": [
