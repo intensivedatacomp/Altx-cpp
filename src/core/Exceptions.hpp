@@ -26,8 +26,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-
-using namespace std;
+#include <string_view>
 
 namespace altx
 {
@@ -35,9 +34,13 @@ namespace altx
 ///
 /// Thrown directly only where no category below fits; catch it to handle
 /// everything at once.
-class Error : public runtime_error
+class Error : public std::runtime_error
 {
     using runtime_error::runtime_error;
+
+public:
+    Error();
+    ~Error() override;
 };
 
 /// @brief A parameter set violates a semantic rule.
@@ -50,6 +53,7 @@ class ParameterError : public Error
 {
 public:
     using Error::Error;
+    ~ParameterError() override;
 };
 
 /// @brief A computation produced a value the numerical policy forbids.
@@ -62,6 +66,7 @@ class NumericalError : public Error
 {
 public:
     using Error::Error;
+    ~NumericalError() override;
 };
 
 /// @brief A file could not be opened, read or written.
@@ -77,21 +82,21 @@ public:
     ///   "cannot open for reading".
     ///
     /// `what()` names both, as `path: reason`.
-    IoError(const string &path, const string &reason);
+    explicit IoError(const std::string &path, const std::string &reason);
 
     /// @brief The file the error is about.
     /// @return A view that stays valid as long as any copy of this exception.
-    [[nodiscard]] string_view path() const noexcept;
+    [[nodiscard]] std::string_view path() const noexcept;
 
     /// @brief What went wrong, without the path.
     /// @return A view that stays valid as long as any copy of this exception.
-    [[nodiscard]] string_view reason() const noexcept;
+    [[nodiscard]] std::string_view reason() const noexcept;
 
 private:
     /// Shared between copies, so that copying cannot throw.
-    shared_ptr<string> my_path;
+    std::shared_ptr<const std::string> my_path;
     /// Shared between copies, so that copying cannot throw.
-    shared_ptr<string> my_reason;
+    std::shared_ptr<const std::string> my_reason;
 };
 
 /// @brief A file was read, but it does not conform to the ALTX schema.
@@ -108,21 +113,21 @@ public:
     /// @param reason The violation, e.g. "/laws/000 has no dataset P".
     ///
     /// `what()` names both, as `path: reason`.
-    FormatError(const string &path, const string &reason);
+    explicit FormatError(const std::string &path, const std::string &reason);
 
     /// @brief The file the error is about.
     /// @return A view that stays valid as long as any copy of this exception.
-    [[nodiscard]] string_view path() const noexcept;
+    [[nodiscard]] std::string_view path() const noexcept;
 
     /// @brief The violation, without the path.
     /// @return A view that stays valid as long as any copy of this exception.
-    [[nodiscard]] string_view reason() const noexcept;
+    [[nodiscard]] std::string_view reason() const noexcept;
 
 private:
     /// Shared between copies, so that copying cannot throw.
-    shared_ptr<string> my_path;
+    std::shared_ptr<const std::string> my_path;
     /// Shared between copies, so that copying cannot throw.
-    shared_ptr<string> my_reason;
+    std::shared_ptr<const std::string> my_reason;
 };
 
 /// @brief The input data holds a NaN or an infinity.
@@ -138,7 +143,7 @@ public:
     /// @param instance Index of the instance (time series) in the data set.
     /// @param channel Index of the channel within that instance.
     /// @param time_index Index of the sample within that channel.
-    NonFiniteError(size_t instance, size_t channel, size_t time_index);
+    explicit NonFiniteError(size_t instance, size_t channel, size_t time_index);
 
     /// @brief Index of the instance holding the value.
     /// @return The 0-based instance index.
@@ -158,13 +163,13 @@ private:
     /// @param channel Index of the channel.
     /// @param time_index Index of the sample.
     /// @return A message naming all three indices.
-    static string makeMessage(size_t instance, size_t channel,
-                              size_t time_index)
+    static std::string makeMessage(size_t instance, size_t channel,
+                                   size_t time_index)
     {
-        string res;
-        res += "The value is infinite at instance " + to_string(instance) +
-               ", channel " + to_string(channel) + ", time index " +
-               to_string(time_index) + " is infinite!";
+        std::string res;
+        res += "Non-finite value at instance " + std::to_string(instance) +
+               ", channel " + std::to_string(channel) + ", time index " +
+               std::to_string(time_index) + "!";
         return res;
     }
     /// The 0-based instance index.
