@@ -18,7 +18,6 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
-#include <exception>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -113,6 +112,7 @@ TEST(Exceptions, IoErrorCarriesPath)
     const altx::IoError error("data/in.h5", "cannot open for reading");
 
     EXPECT_EQ(error.path(), std::string_view("data/in.h5"));
+    EXPECT_EQ(error.reason(), std::string_view("cannot open for reading"));
 
     const std::string message = error.what();
     EXPECT_NE(message.find("data/in.h5"), std::string::npos) << message;
@@ -127,6 +127,7 @@ TEST(Exceptions, FormatErrorCarriesPath)
     const altx::FormatError error("run.h5", "/laws/000 has no dataset P");
 
     EXPECT_EQ(error.path(), std::string_view("run.h5"));
+    EXPECT_EQ(error.reason(), std::string_view("/laws/000 has no dataset P"));
 
     const std::string message = error.what();
     EXPECT_NE(message.find("run.h5"), std::string::npos) << message;
