@@ -19,10 +19,10 @@ on:
     #
     # What a push gets is not what `main` gets -- see the `presets` step. A
     # branch gets the fast pair, so iterating stays under a few minutes.
-    branches: ['**']
-    # The coverage job commits a badge to `main`. Without this, that commit
-    # starts another run of this workflow, which produces the same badge.
-    paths-ignore: ['.badges/**']
+    #
+    # `badges` is the one branch excluded: it holds nothing but the coverage
+    # badge the `coverage` job writes, and has no tree to build.
+    branches: ['**', '!badges']
   pull_request:
     branches: [main, master]
   workflow_dispatch:
@@ -201,12 +201,18 @@ jobs:
 
       # Committed to the repository rather than fetched from shields.io, so the
       # README renders from the repository itself -- the pattern the Python
-      # implementation already uses. `paths-ignore` at the top of this file is
-      # what keeps this commit from triggering another run.
+      # implementation already uses -- but to a branch of its own, `badges`,
+      # never to `main`.
       #
-      # `main` is protected and this push is permitted through it. If that ever
-      # changes, this step is where it shows, and the alternative is a badge
-      # committed to a branch rather than a softer failure here.
+      # `main` is protected by a ruleset that requires a pull request, and that
+      # rule binds the Actions token like everyone else: the push this step used
+      # to make, `HEAD:main`, was rejected with GH013. A badge is not worth a
+      # pull request, nor a bypass on the rule that keeps `main` reviewed.
+      #
+      # The branch is an orphan holding one file in one commit, force-pushed
+      # each time, so it never accumulates history. The README links to it by
+      # its raw URL. A push made with GITHUB_TOKEN starts no workflow, and the
+      # `!badges` filters exclude it from every `push` trigger anyway.
       #
       # Guarded on the repository name as well as the event: a fork whose
       # owner pushes to their own `main` should not have a workflow of ours
@@ -214,15 +220,26 @@ jobs:
       - name: Deploy the coverage badge
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main'
                 && github.repository == 'intensivedatacomp/Altx-cpp' }}
+        env:
+          PERCENTAGE: ${{ steps.coverage.outputs.percentage }}
         run: |
           set -euo pipefail
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          mkdir -p .badges
-          mv coverage/coverage.svg .badges/coverage.svg
-          git add .badges/coverage.svg
-          # Nothing to do when the percentage has not moved, which is the
-          # common case and must not fail the job.
-          git diff --cached --quiet \
-            || git commit -m "Update coverage badge (${{ steps.coverage.outputs.percentage }}%)"
-          git push origin HEAD:main
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Nothing to do when the badge has not changed, which is the common
+          # case and must not fail the job. A missing branch -- the first run,
+          # or after someone deleted it -- simply fails the fetch.
+          if git fetch --quiet --depth 1 origin badges 2>/dev/null \
+              && git show FETCH_HEAD:coverage.svg 2>/dev/null | cmp -s - coverage/coverage.svg; then
+            echo "Badge unchanged at ${PERCENTAGE}%"
+            exit 0
+          fi
+          # The parentless one-file commit is built with plumbing, so the
+          # checkout's own working tree and branches are never touched -- and
+          # it is pushed from this repository, whose config holds the
+          # credentials actions/checkout set up.
+          blob=$(git hash-object -w coverage/coverage.svg)
+          tree=$(printf '100644 blob %s\tcoverage.svg\n' "$blob" | git mktree)
+          commit=$(git commit-tree "$tree" \
+                     -m "Coverage badge (${PERCENTAGE}%) for ${GITHUB_SHA:0:12}")
+          git push --quiet --force origin "$commit:refs/heads/badges"

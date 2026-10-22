@@ -103,7 +103,8 @@ scripts/ci/coverage.sh --fail-under 80   # exit non-zero below 80 % line coverag
 `coverage.sh` writes the lcov tracefile, the HTML report in `coverage/html/` and the badge. Run it
 inside `dev-cpu`, which has lcov. It calls `coverage_badge.py`, which turns a tracefile into a
 percentage and an SVG without any network access:
-`scripts/ci/coverage_badge.py --info coverage/coverage.info --output .badges/coverage.svg`.
+`scripts/ci/coverage_badge.py --info coverage/coverage.info --output coverage/coverage.svg`.
+CI publishes that file to the `badges` branch, which the README's badge links to.
 
 ### `scripts/ci/docs.sh` — the documentation, and the documentation-coverage check
 
