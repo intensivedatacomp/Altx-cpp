@@ -34,17 +34,17 @@ namespace altx
 
 static_assert(std::is_base_of_v<std::runtime_error, altx::Error>);
 
-/*static_assert(std::is_base_of_v<altx::Error, altx::ParameterError>);
+static_assert(std::is_base_of_v<altx::Error, altx::ParameterError>);
 static_assert(std::is_base_of_v<altx::Error, altx::IoError>);
 static_assert(std::is_base_of_v<altx::Error, altx::FormatError>);
 static_assert(std::is_base_of_v<altx::Error, altx::NonFiniteError>);
-static_assert(std::is_base_of_v<altx::Error, altx::NumericalError>);*/
+static_assert(std::is_base_of_v<altx::Error, altx::NumericalError>);
 
 // Siblings, not a chain: a handler for one category must not catch another.
-/*static_assert(!std::is_base_of_v<altx::IoError, altx::FormatError>);
+static_assert(!std::is_base_of_v<altx::IoError, altx::FormatError>);
 static_assert(!std::is_base_of_v<altx::FormatError, altx::IoError>);
 static_assert(!std::is_base_of_v<altx::ParameterError, altx::FormatError>);
-static_assert(!std::is_base_of_v<altx::NumericalError, altx::NonFiniteError>);*/
+static_assert(!std::is_base_of_v<altx::NumericalError, altx::NonFiniteError>);
 
 /// @brief Asserts the copy guarantees an exception type must give.
 /// @tparam E The exception type under test.
@@ -56,11 +56,11 @@ constexpr bool isSafelyCopyable()
 }
 
 static_assert(isSafelyCopyable<altx::Error>());
-/*static_assert(isSafelyCopyable<altx::ParameterError>());
+static_assert(isSafelyCopyable<altx::ParameterError>());
 static_assert(isSafelyCopyable<altx::IoError>());
 static_assert(isSafelyCopyable<altx::FormatError>());
 static_assert(isSafelyCopyable<altx::NonFiniteError>());
-static_assert(isSafelyCopyable<altx::NumericalError>());*/
+static_assert(isSafelyCopyable<altx::NumericalError>());
 
 // --- The plain categories ---------------------------------------------------
 
@@ -68,12 +68,12 @@ static_assert(isSafelyCopyable<altx::NumericalError>());*/
 TEST(Exceptions, PlainTypesKeepTheirMessage)
 {
     EXPECT_STREQ(altx::Error("base").what(), "base");
-    /*EXPECT_STREQ(altx::ParameterError("r must be odd").what(), "r must be
-    odd"); EXPECT_STREQ(altx::NumericalError(std::string("moment
-    overflowed")).what(), "moment overflowed");*/
+    EXPECT_STREQ(altx::ParameterError("r must be odd").what(), "r must be odd");
+    EXPECT_STREQ(altx::NumericalError(std::string("moment overflowed")).what(),
+                 "moment overflowed");
 }
 
-/*/// @brief One `catch (const altx::Error&)` sees every category.
+/// @brief One `catch (const altx::Error&)` sees every category.
 TEST(Exceptions, EveryCategoryIsCaughtAsError)
 {
     EXPECT_THROW(throw altx::ParameterError("p"), altx::Error);
@@ -191,5 +191,5 @@ TEST(Exceptions, NonFiniteErrorDoesNotTruncateLargeIndices)
     EXPECT_NE(message.find(std::to_string(kLarge)), std::string::npos)
         << message;
 }
-*/
+
 }  // namespace altx
