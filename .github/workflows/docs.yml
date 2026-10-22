@@ -17,9 +17,6 @@ on:
     # broken doc comment and a push.
     branches: [main]
     tags: ['v*']
-    # The coverage job in build-test.yml commits a badge to `main`. Nothing
-    # about the documentation changes when it does.
-    paths-ignore: ['.badges/**']
   pull_request:
     branches: [main]
   workflow_dispatch:

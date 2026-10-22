@@ -10,7 +10,8 @@ data and has no lcov counterpart; shields.io would work but makes the README of
 a private repository depend on an external service resolving a URL nobody here
 controls. Both reasons point the same way: compute the number from the
 tracefile and write the SVG, so the badge is a committed file like the Python
-repository's and renders from the repository itself.
+repository's -- on the ``badges`` branch, see build-test.yml -- and renders from
+the repository itself.
 
 **The number is taken from the tracefile, not from ``lcov --summary``.** Line
 coverage is the sum of the ``LH`` records over the sum of the ``LF`` records,
@@ -20,7 +21,7 @@ specified rather than against output meant for a terminal -- and lcov 2.0's
 
 Usage::
 
-    scripts/ci/coverage_badge.py --info coverage.info --output .badges/coverage.svg
+    scripts/ci/coverage_badge.py --info coverage.info --output coverage.svg
 
 The percentage is printed to stdout, so a workflow can capture it for a job
 summary without parsing the SVG back.

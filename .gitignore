@@ -87,8 +87,8 @@ Testing/
 .cache/
 
 # Coverage report -- scripts/ci/coverage.sh writes the tracefile, the genhtml
-# tree and the badge here. Only the badge is kept, and CI moves that to
-# .badges/coverage.svg, which *is* committed.
+# tree and the badge here. Only the badge is kept: CI publishes it to the
+# `badges` branch, never to `main`.
 coverage/
 
 # Python bytecode -- scripts/ci/ imports across modules, so this appears there

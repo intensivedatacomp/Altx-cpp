@@ -371,7 +371,9 @@ labels.
 @subsection quality_ci_coverage Coverage
 
 The same workflow builds the `coverage` preset and publishes an HTML report as a workflow artefact;
-a push to `main` also commits `.badges/coverage.svg`, which is what the README renders. One command
+a push to `main` also force-pushes `coverage.svg` to the orphan `badges` branch, which is what the
+README renders. It is not committed to `main`: the ruleset there requires a pull request, and it
+binds the Actions token too. One command
 reproduces all of it inside `dev-cpu`:
 
 ```bash

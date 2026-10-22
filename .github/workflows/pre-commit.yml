@@ -20,8 +20,9 @@ on:
     #
     # `'**'` matches names containing `/`, so `feature/x` counts. Tags are
     # deliberately excluded: a tag points at a commit that was already linted
-    # when it was pushed as a branch.
-    branches: ['**']
+    # when it was pushed as a branch. `badges` holds only the coverage badge
+    # build-test.yml writes; there is nothing on it to lint.
+    branches: ['**', '!badges']
   pull_request:
     branches: [main, master]
   workflow_dispatch:
