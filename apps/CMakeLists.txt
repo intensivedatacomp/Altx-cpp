@@ -7,15 +7,14 @@
 # variable and not a target property. See DevelopmentPlan.md, "How one image
 # gets two binaries".
 #
-# There is no library to link yet. When src/ arrives, `altx_core` goes into the
-# list below and takes the interface targets with it; this file does not
-# otherwise change.
+# Everything but `main` lives in `altx_core` (src/CMakeLists.txt).
 
 add_executable(altx altx_main.cpp)
 
 target_link_libraries(
     altx
     PRIVATE
+        altx::core
         altx::config
         altx::version
         altx::warnings

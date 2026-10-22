@@ -10,11 +10,9 @@
 #     application's link line. Cross-cutting concerns are INTERFACE targets
 #     (`altx_warnings`, `altx_sanitizers`, `altx_coverage`, `altx_config`,
 #     `altx_version`) that a target has to ask for by linking it.
-#   * There is one library target, and MPI and HIP add *files* to it rather
-#     than copies of it. That library does not exist yet -- the repository
-#     currently holds one `main` and nothing else -- so `apps/` is presently
-#     the only consumer of the interface targets below. `altx_core` arrives
-#     with src/, at which point it links exactly the same set.
+#   * There is one library target, `altx_core` in src/, and MPI and HIP add
+#     *files* to it rather than copies of it. The application and the test
+#     binaries both link it.
 #   * The options are orthogonal, and an unsupported combination fails at
 #     configure time with a readable message instead of producing a subtly
 #     wrong build. See cmake/AltxOptions.cmake.
@@ -81,6 +79,7 @@ include(Coverage)
 include(Dependencies)
 include(Version)
 
+add_subdirectory(src)
 add_subdirectory(apps)
 
 if(ALTX_ENABLE_TESTS)
