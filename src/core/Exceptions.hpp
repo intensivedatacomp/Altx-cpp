@@ -36,10 +36,8 @@ namespace altx
 /// everything at once.
 class Error : public std::runtime_error
 {
-    using runtime_error::runtime_error;
-
 public:
-    Error();
+    using runtime_error::runtime_error;
     ~Error() override;
 };
 
@@ -143,19 +141,20 @@ public:
     /// @param instance Index of the instance (time series) in the data set.
     /// @param channel Index of the channel within that instance.
     /// @param time_index Index of the sample within that channel.
-    explicit NonFiniteError(size_t instance, size_t channel, size_t time_index);
+    explicit NonFiniteError(std::size_t instance, std::size_t channel,
+                            std::size_t time_index);
 
     /// @brief Index of the instance holding the value.
     /// @return The 0-based instance index.
-    [[nodiscard]] size_t instance() const noexcept;
+    [[nodiscard]] std::size_t instance() const noexcept;
 
     /// @brief Index of the channel holding the value.
     /// @return The 0-based channel index.
-    [[nodiscard]] size_t channel() const noexcept;
+    [[nodiscard]] std::size_t channel() const noexcept;
 
     /// @brief Index of the sample within its channel.
     /// @return The 0-based time index.
-    [[nodiscard]] size_t timeIndex() const noexcept;
+    [[nodiscard]] std::size_t timeIndex() const noexcept;
 
 private:
     /// @brief Builds the message, before the base class is constructed.
@@ -163,20 +162,13 @@ private:
     /// @param channel Index of the channel.
     /// @param time_index Index of the sample.
     /// @return A message naming all three indices.
-    static std::string makeMessage(size_t instance, size_t channel,
-                                   size_t time_index)
-    {
-        std::string res;
-        res += "Non-finite value at instance " + std::to_string(instance) +
-               ", channel " + std::to_string(channel) + ", time index " +
-               std::to_string(time_index) + "!";
-        return res;
-    }
+    static std::string makeMessage(std::size_t instance, std::size_t channel,
+                                   std::size_t time_index);
     /// The 0-based instance index.
-    size_t my_instance;
+    std::size_t my_instance;
     /// The 0-based channel index.
-    size_t my_channel;
+    std::size_t my_channel;
     /// The 0-based time index.
-    size_t my_time_index;
+    std::size_t my_time_index;
 };
 }  // namespace altx

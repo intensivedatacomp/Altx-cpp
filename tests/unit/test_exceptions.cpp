@@ -27,7 +27,7 @@
 
 #include "core/Exceptions.hpp"
 
-namespace altx
+namespace
 {
 
 // --- The hierarchy, checked at compile time ---------------------------------
@@ -192,4 +192,4 @@ TEST(Exceptions, NonFiniteErrorDoesNotTruncateLargeIndices)
         << message;
 }
 
-}  // namespace altx
+}  // namespace
