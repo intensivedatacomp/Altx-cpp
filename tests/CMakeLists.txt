@@ -12,11 +12,7 @@
 
 include(GoogleTest)
 
-add_executable(
-    altx_unit_tests
-    unit/test_smoke.cpp
-    unit/test_exceptions.cpp
-)
+add_executable(altx_unit_tests unit/test_smoke.cpp unit/test_exceptions.cpp)
 
 target_link_libraries(
     altx_unit_tests
