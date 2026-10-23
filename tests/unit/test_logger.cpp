@@ -115,7 +115,7 @@ TEST(Logger, EnabledFollowsTheThreshold)
     EXPECT_FALSE(logger.enabled(altx::LogLevel::Debug));
 }
 
-/*/// @brief Only the messages at or below the threshold reach the sink.
+/// @brief Only the messages at or below the threshold reach the sink.
 TEST(Logger, SuppressedMessagesWriteNothing)
 {
     std::ostringstream sink;
@@ -133,7 +133,7 @@ TEST(Logger, SuppressedMessagesWriteNothing)
     EXPECT_TRUE(contains(written[1], "an error message")) << written[1];
 }
 
-/// @brief `setLevel()` changes what is printed from then on; it is what
+/*/// @brief `setLevel()` changes what is printed from then on; it is what
 /// `--verbose` calls.
 TEST(Logger, SetLevelRaisesTheThreshold)
 {

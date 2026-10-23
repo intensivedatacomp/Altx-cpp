@@ -1,5 +1,6 @@
 #pragma once
 
+#include <iostream>
 #include <string>
 #include <string_view>
 
@@ -27,6 +28,34 @@ public:
     bool enabled(LogLevel level) const noexcept
     {
         return my_rank == 0 && level <= my_level;
+    }
+    void debug(std::string message)
+    {
+        if (enabled(LogLevel::Debug))
+        {
+            my_sink << message << std::endl;
+        }
+    }
+    void info(std::string message)
+    {
+        if (enabled(LogLevel::Info))
+        {
+            my_sink << message << std::endl;
+        }
+    }
+    void warning(std::string message)
+    {
+        if (enabled(LogLevel::Warning))
+        {
+            my_sink << message << std::endl;
+        }
+    }
+    void error(std::string message)
+    {
+        if (enabled(LogLevel::Error))
+        {
+            my_sink << message << std::endl;
+        }
     }
 
 private:
