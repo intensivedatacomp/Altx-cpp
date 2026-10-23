@@ -1,13 +1,12 @@
 #pragma once
 
-#include <sstream>
 #include <string>
 #include <string_view>
 
 namespace altx
 {
 
-enum LogLevel
+enum class LogLevel
 {
     Error,
     Warning,
@@ -18,39 +17,45 @@ enum LogLevel
 class Logger
 {
 public:
-    explicit Logger(std::ostringstream &sink, LogLevel level = LogLevel::Info,
+    explicit Logger(std::ostream &sink, LogLevel level = LogLevel::Info,
                     int rank = 0)
-        : my_level(level){};
+        : my_sink(sink), my_level(level), my_rank(rank){};
     Logger(const Logger &) = delete;
     Logger &operator=(const Logger &) = delete;
 
     LogLevel level() const noexcept { return my_level; }
+    bool enabled(LogLevel level) const noexcept
+    {
+        return my_rank == 0 && level <= my_level;
+    }
 
 private:
+    std::ostream &my_sink;
     LogLevel my_level;
+    int my_rank;
 };
 
-constexpr std::string toString(LogLevel lev) noexcept
+constexpr std::string_view toString(LogLevel lev) noexcept
 {
-    std::string ret;
+    std::string_view ret;
     switch (lev)
     {
-        case Debug:
+        case LogLevel::Debug:
         {
             ret = "debug";
             break;
         }
-        case Info:
+        case LogLevel::Info:
         {
             ret = "info";
             break;
         }
-        case Warning:
+        case LogLevel::Warning:
         {
             ret = "warning";
             break;
         }
-        case Error:
+        case LogLevel::Error:
         {
             ret = "error";
             break;

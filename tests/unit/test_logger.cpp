@@ -39,8 +39,8 @@ namespace
 // --- Compile-time properties ------------------------------------------------
 
 static_assert(std::is_enum_v<altx::LogLevel>);
-/*static_assert(!std::is_convertible_v<altx::LogLevel, int>,
-              "LogLevel is a scoped enum");*/
+static_assert(!std::is_convertible_v<altx::LogLevel, int>,
+              "LogLevel is a scoped enum");
 
 // Ordered from the most to the least severe: raising the threshold admits
 // more messages, which is what `--verbose` does.
@@ -63,12 +63,11 @@ static_assert(!std::is_copy_assignable_v<altx::Logger>);
 
 // It cannot be built without a sink: there is no hidden default stream.
 static_assert(!std::is_default_constructible_v<altx::Logger>);
-/*static_assert(std::is_constructible_v<altx::Logger, std::ostream &>);
+static_assert(std::is_constructible_v<altx::Logger, std::ostream &>);
 static_assert(
     std::is_constructible_v<altx::Logger, std::ostream &, altx::LogLevel>);
 static_assert(
-    std::is_constructible_v<altx::Logger, std::ostream &, altx::LogLevel,
-int>);*/
+    std::is_constructible_v<altx::Logger, std::ostream &, altx::LogLevel, int>);
 
 /// @brief Splits captured output into lines, dropping the final empty one.
 /// @param text The captured output.
@@ -103,7 +102,7 @@ TEST(Logger, DefaultThresholdIsInfo)
     const altx::Logger logger(sink);
     EXPECT_EQ(logger.level(), altx::LogLevel::Info);
 }
-/*
+
 /// @brief `enabled()` admits exactly the levels at or below the threshold.
 TEST(Logger, EnabledFollowsTheThreshold)
 {
@@ -116,7 +115,7 @@ TEST(Logger, EnabledFollowsTheThreshold)
     EXPECT_FALSE(logger.enabled(altx::LogLevel::Debug));
 }
 
-/// @brief Only the messages at or below the threshold reach the sink.
+/*/// @brief Only the messages at or below the threshold reach the sink.
 TEST(Logger, SuppressedMessagesWriteNothing)
 {
     std::ostringstream sink;
@@ -224,7 +223,7 @@ struct Counted
 };
 
 }  // namespace
-*/
+* /
 /// @brief Formats a Counted as "counted", and counts each call.
 // template <>
 // struct std::formatter<Counted> : std::formatter<std::string_view>
@@ -232,7 +231,7 @@ struct Counted
 //     /// @brief Writes "counted" and increments Counted::formatted.
 //     /// @param context The format context the output goes to.
 //     /// @return The end of the output.
-//     auto format(const Counted & /*value*/, std::format_context &context)
+//     auto format(const Counted & /// *value*///, std::format_context &context)
 //     const
 //     {
 //         ++Counted::formatted;
