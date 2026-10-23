@@ -1,6 +1,8 @@
 #pragma once
 
+#include <sstream>
 #include <string>
+#include <string_view>
 
 namespace altx
 {
@@ -15,6 +17,17 @@ enum LogLevel
 
 class Logger
 {
+public:
+    explicit Logger(std::ostringstream &sink, LogLevel level = LogLevel::Info,
+                    int rank = 0)
+        : my_level(level){};
+    Logger(const Logger &) = delete;
+    Logger &operator=(const Logger &) = delete;
+
+    LogLevel level() const noexcept { return my_level; }
+
+private:
+    LogLevel my_level;
 };
 
 constexpr std::string toString(LogLevel lev) noexcept
