@@ -2037,6 +2037,21 @@ structure.
 **Logging** is a small header-only, level-based, rank-aware facility written in-project rather
 than a dependency such as spdlog -- consistent with the decision to avoid Boost. Only rank 0
 prints by default, output happens on one thread, and `--verbose` raises the level.
+Made concrete by `tests/unit/test_logger.cpp`:
+
+- **An instance, not a global.** `Logger` writes to a `std::ostream &` it is given and does not
+  own -- `std::cerr` from `main`, a string stream in a test -- and components receive it by
+  reference, as they will the `Communicator`.
+- **It knows a rank as an `int`, never through MPI**, so `core/` stays MPI-free; `main` reads the
+  rank from the communicator and passes it in.
+- **Rank 0 prints up to the threshold; every other rank prints errors only**, tagged `rank N`.
+  The rank that throws is the one that calls `MPI_Abort`, and its message must not be the one
+  suppressed.
+- **Messages are `std::format` strings, and a suppressed one is never formatted**, so a
+  `debug()` in a loop costs a comparison.
+- **Each message is one whole line, written under a lock and flushed before returning**:
+  `MPI_Abort` does not flush streams, and a call from inside an OpenMP region must not splice two
+  lines together.
 
 **Namespace** `altx`, with sub-namespaces mirroring the directories (`altx::io`,
 `altx::backend`, `altx::dist`).
