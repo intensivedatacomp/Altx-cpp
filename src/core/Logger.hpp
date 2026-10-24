@@ -2,6 +2,7 @@
 
 #include <format>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -54,6 +55,7 @@ public:
         : my_sink(sink), my_level(level), my_rank(rank){};
     Logger(const Logger &) = delete;
     Logger &operator=(const Logger &) = delete;
+    ~Logger() { my_mtx.unlock(); }
 
     LogLevel level() const noexcept { return my_level; }
     bool enabled(LogLevel level) const noexcept
@@ -73,7 +75,10 @@ public:
             }
             output += std::string(toString(level)) + ": " +
                       std::format(fmt, std::forward<Args>(args)...);
+
+            my_mtx.lock();
             my_sink << output << std::endl;
+            my_mtx.unlock();
         }
     }
     template <class... Args>
@@ -104,6 +109,7 @@ private:
     std::ostream &my_sink;
     LogLevel my_level;
     int my_rank;
+    std::mutex my_mtx;
 };
 
 }  // namespace altx
