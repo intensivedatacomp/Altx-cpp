@@ -149,7 +149,7 @@ TEST(Logger, SetLevelRaisesTheThreshold)
     EXPECT_FALSE(contains(output, "hidden")) << output;
     EXPECT_TRUE(contains(output, "shown")) << output;
 }
-/*
+
 /// @brief Each line names its level, so a warning can be told from an error.
 TEST(Logger, LineNamesItsLevel)
 {
@@ -215,7 +215,7 @@ TEST(Logger, EachMessageIsOneTerminatedLine)
     EXPECT_EQ(lines(output).size(), std::size_t{2}) << output;
 }
 
-/// @brief Counts how often it is formatted; see LazyFormatting.
+/*/// @brief Counts how often it is formatted; see LazyFormatting.
 struct Counted
 {
     /// The number of times std::formatter<Counted> has formatted an object.
