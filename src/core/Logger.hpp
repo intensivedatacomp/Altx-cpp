@@ -23,8 +23,8 @@
 #pragma once
 
 #include <format>
-#include <iostream>
 #include <mutex>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -47,36 +47,31 @@ enum class LogLevel
 };
 
 /// @brief The name of a level, as a `--log-level` option would spell it.
-/// @param lev The level to name.
+/// @param level The level to name.
 /// @return One of "error", "warning", "info" or "debug", in lower case; a
 ///   view of a string literal, so it never dangles.
-constexpr std::string_view toString(LogLevel lev) noexcept
+constexpr std::string_view toString(LogLevel level) noexcept
 {
-    std::string_view ret;
-    switch (lev)
+    switch (level)
     {
         case LogLevel::Debug:
         {
-            ret = "debug";
-            break;
+            return "debug";
         }
         case LogLevel::Info:
         {
-            ret = "info";
-            break;
+            return "info";
         }
         case LogLevel::Warning:
         {
-            ret = "warning";
-            break;
+            return "warning";
         }
         case LogLevel::Error:
         {
-            ret = "error";
-            break;
+            return "error";
         }
+            return "";
     }
-    return ret;
 }
 
 /// @brief Writes leveled, rank-tagged messages to a stream it does not own.
@@ -100,7 +95,9 @@ public:
     ///   rank 0 prints below LogLevel::Error.
     explicit Logger(std::ostream &sink, LogLevel level = LogLevel::Info,
                     int rank = 0)
-        : my_sink(sink), my_level(level), my_rank(rank){};
+        : my_sink(sink), my_level(level), my_rank(rank)
+    {
+    }
     /// @brief Not copyable; see the class description.
     Logger(const Logger &) = delete;
     /// @brief Not copy-assignable; see the class description.
@@ -109,7 +106,7 @@ public:
 
     /// @brief The current threshold.
     /// @return The least severe level that is still printed on rank 0.
-    LogLevel level() const noexcept { return my_level; }
+    [[nodiscard]] LogLevel level() const noexcept { return my_level; }
     /// @brief Whether a message at @p level would be printed by this logger.
     ///
     /// Accounts for both the threshold and the rank, so a caller can skip
@@ -117,7 +114,7 @@ public:
     /// @param level The level of the prospective message.
     /// @return `true` on rank 0 for any level within the threshold, and on
     ///   every rank for LogLevel::Error.
-    bool enabled(LogLevel level) const noexcept
+    [[nodiscard]] bool enabled(LogLevel level) const noexcept
     {
         return (my_rank == 0 && level <= my_level) ||
                (level == LogLevel::Error);
@@ -138,12 +135,11 @@ public:
         if (enabled(level))
         {
             std::string output = "";
-            if (my_rank != 0)
-            {
-                output += "[rank " + std::to_string(my_rank) + "] ";
-            }
-            output += std::string(toString(level)) + ": " +
-                      std::format(fmt, std::forward<Args>(args)...);
+            std::string rank_str = "[rank " + std::to_string(my_rank) + "] ";
+
+            output += std::format(
+                "{} {}: {}", rank() != 0 ? rank_str : "", toString(level),
+                std::format(fmt, std::forward<Args>(args)...));
 
             const std::lock_guard<std::mutex> guard(my_mutex);
             my_sink << output << std::endl;
@@ -188,11 +184,15 @@ public:
 
     /// @brief Changes the threshold for every later message; what
     /// `--verbose` calls.
+    ///
+    /// Not synchronised: the threshold is read by log() without the lock, so
+    /// this must not be called while another thread may be logging through
+    /// the same logger. Set it once, before any parallel work starts.
     /// @param level The new threshold.
     void setLevel(LogLevel level) noexcept { my_level = level; }
     /// @brief The rank this logger was created for.
     /// @return The rank given to the constructor; 0 by default.
-    int rank() const noexcept { return my_rank; }
+    [[nodiscard]] int rank() const noexcept { return my_rank; }
 
 private:
     /// The stream lines go to; not owned.
