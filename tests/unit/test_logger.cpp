@@ -133,7 +133,7 @@ TEST(Logger, SuppressedMessagesWriteNothing)
     EXPECT_TRUE(contains(written[1], "an error message")) << written[1];
 }
 
-/*/// @brief `setLevel()` changes what is printed from then on; it is what
+/// @brief `setLevel()` changes what is printed from then on; it is what
 /// `--verbose` calls.
 TEST(Logger, SetLevelRaisesTheThreshold)
 {
@@ -149,7 +149,7 @@ TEST(Logger, SetLevelRaisesTheThreshold)
     EXPECT_FALSE(contains(output, "hidden")) << output;
     EXPECT_TRUE(contains(output, "shown")) << output;
 }
-
+/*
 /// @brief Each line names its level, so a warning can be told from an error.
 TEST(Logger, LineNamesItsLevel)
 {

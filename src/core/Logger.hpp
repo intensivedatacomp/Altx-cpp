@@ -58,6 +58,8 @@ public:
         }
     }
 
+    void setLevel(LogLevel level) noexcept { my_level = level; }
+
 private:
     std::ostream &my_sink;
     LogLevel my_level;
