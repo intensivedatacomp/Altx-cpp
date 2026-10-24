@@ -56,6 +56,26 @@ static_assert(altx::toString(altx::LogLevel::Info) == "info");
 static_assert(altx::toString(altx::LogLevel::Debug) == "debug");
 static_assert(noexcept(altx::toString(altx::LogLevel::Info)));
 
+/// @brief Whether @p name is one of the four level names.
+/// @param name The string to check.
+/// @return `true` for "error", "warning", "info" or "debug".
+constexpr bool isLevelName(std::string_view name)
+{
+    return name == "error" || name == "warning" || name == "info" ||
+           name == "debug";
+}
+
+/// @brief A value that is a valid LogLevel but none of its enumerators.
+///
+/// A scoped enum's underlying type is fixed (`int`), so every `int` converts
+/// to a valid LogLevel, not only the four that have names.
+constexpr altx::LogLevel kUnnamedLevel = static_cast<altx::LogLevel>(42);
+
+// toString() must return even for such a value: falling off its end would be
+// undefined behaviour, which a constant expression may not contain, so this
+// fails to compile if it does.
+static_assert(!isLevelName(altx::toString(kUnnamedLevel)));
+
 // A logger refers to a stream it does not own; two copies would share it
 // without sharing whatever keeps their lines apart.
 static_assert(!std::is_copy_constructible_v<altx::Logger>);
@@ -182,6 +202,18 @@ TEST(Logger, LogTakesTheLevelAsAnArgument)
     ASSERT_EQ(written.size(), std::size_t{1}) << sink.str();
     EXPECT_TRUE(contains(written[0], "shown")) << written[0];
     EXPECT_TRUE(contains(written[0], "warning")) << written[0];
+}
+
+/// @brief A level with no name is not given one of the four names.
+///
+/// The same property as the `static_assert` above, checked at run time: a
+/// constant-evaluated call executes no code, so only this one shows up in the
+/// coverage report.
+TEST(Logger, UnnamedLevelHasNoLevelName)
+{
+    // Not constexpr, so the call cannot be folded away at compile time.
+    altx::LogLevel level = kUnnamedLevel;
+    EXPECT_FALSE(isLevelName(altx::toString(level)));
 }
 
 // --- Formatting -------------------------------------------------------------

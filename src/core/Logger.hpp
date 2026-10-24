@@ -48,8 +48,10 @@ enum class LogLevel
 
 /// @brief The name of a level, as a `--log-level` option would spell it.
 /// @param level The level to name.
-/// @return One of "error", "warning", "info" or "debug", in lower case; a
-///   view of a string literal, so it never dangles.
+/// @return One of "error", "warning", "info" or "debug", in lower case, or
+///   an empty view for a value that is none of the enumerators -- which a
+///   scoped enum can hold, since any `int` converts to it. Always a view of a
+///   string literal, so it never dangles.
 constexpr std::string_view toString(LogLevel level) noexcept
 {
     switch (level)
@@ -70,8 +72,8 @@ constexpr std::string_view toString(LogLevel level) noexcept
         {
             return "error";
         }
-            return "";
     }
+    return "";
 }
 
 /// @brief Writes leveled, rank-tagged messages to a stream it does not own.
@@ -134,12 +136,10 @@ public:
     {
         if (enabled(level))
         {
-            std::string output = "";
-            std::string rank_str = "[rank " + std::to_string(my_rank) + "] ";
-
-            output += std::format(
-                "{} {}: {}", rank() != 0 ? rank_str : "", toString(level),
-                std::format(fmt, std::forward<Args>(args)...));
+            std::string output = std::format(
+                "{}{}: {}",
+                rank() != 0 ? "[rank " + std::to_string(my_rank) + "] " : "",
+                toString(level), std::format(fmt, std::forward<Args>(args)...));
 
             const std::lock_guard<std::mutex> guard(my_mutex);
             my_sink << output << std::endl;
