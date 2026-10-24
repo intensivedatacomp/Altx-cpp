@@ -58,17 +58,21 @@ public:
     LogLevel level() const noexcept { return my_level; }
     bool enabled(LogLevel level) const noexcept
     {
-        return my_rank == 0 && level <= my_level;
+        return (my_rank == 0 && level <= my_level) ||
+               (level == LogLevel::Error);
     }
     template <class... Args>
     void log(LogLevel level, std::format_string<Args...> fmt, Args &&...args)
     {
         if (enabled(level))
         {
-            std::string output;
-            output = "[rank " + std::to_string(my_rank) + "] " +
-                     std::string(toString(level)) + ": " +
-                     std::format(fmt, std::forward<Args>(args)...);
+            std::string output = "";
+            if (my_rank != 0)
+            {
+                output += "[rank " + std::to_string(my_rank) + "] ";
+            }
+            output += std::string(toString(level)) + ": " +
+                      std::format(fmt, std::forward<Args>(args)...);
             my_sink << output << std::endl;
         }
     }
@@ -94,6 +98,7 @@ public:
     }
 
     void setLevel(LogLevel level) noexcept { my_level = level; }
+    int rank() const noexcept { return my_rank; }
 
 private:
     std::ostream &my_sink;

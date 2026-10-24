@@ -215,7 +215,7 @@ TEST(Logger, EachMessageIsOneTerminatedLine)
     EXPECT_EQ(lines(output).size(), std::size_t{2}) << output;
 }
 
-/*/// @brief Counts how often it is formatted; see LazyFormatting.
+/// @brief Counts how often it is formatted; see LazyFormatting.
 struct Counted
 {
     /// The number of times std::formatter<Counted> has formatted an object.
@@ -223,22 +223,21 @@ struct Counted
 };
 
 }  // namespace
-* /
+
 /// @brief Formats a Counted as "counted", and counts each call.
-// template <>
-// struct std::formatter<Counted> : std::formatter<std::string_view>
-//{
-//     /// @brief Writes "counted" and increments Counted::formatted.
-//     /// @param context The format context the output goes to.
-//     /// @return The end of the output.
-//     auto format(const Counted & /// *value*///, std::format_context &context)
-//     const
-//     {
-//         ++Counted::formatted;
-//         return std::formatter<std::string_view>::format("counted", context);
-//     }
-// };
-/*
+template <>
+struct std::formatter<Counted> : std::formatter<std::string_view>
+{
+    /// @brief Writes "counted" and increments Counted::formatted.
+    /// @param context The format context the output goes to.
+    /// @return The end of the output.
+    auto format(const Counted & /*value*/, std::format_context &context) const
+    {
+        ++Counted::formatted;
+        return std::formatter<std::string_view>::format("counted", context);
+    }
+};
+
 namespace
 {
 
@@ -405,5 +404,5 @@ TEST(Logger, ConcurrentMessagesAreNotInterleaved)
         EXPECT_EQ(line.find('>'), line.size() - 1) << line;
     }
 }
-*/
+
 }  // namespace
