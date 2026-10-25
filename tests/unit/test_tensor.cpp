@@ -53,14 +53,14 @@ static_assert(std::is_same_v<DTensor::value_type, double>);
 static_assert(std::is_same_v<DTensor::allocator_type, altx::HostAlloc>);
 
 // 64 bytes is a cache line and the widest SIMD register (AVX-512).
-/*static_assert(altx::HostAlloc::alignment == 64);
+static_assert(altx::HostAlloc::alignment == 64);
 
 // A tensor may hold gigabytes, and a device one cannot be copied with
 // memcpy: an accidental copy must not compile.
 static_assert(!std::is_copy_constructible_v<DTensor>);
 static_assert(!std::is_copy_assignable_v<DTensor>);
 
-// Moving hands the buffer over; it must not throw, or a std::vector<Tensor>
+/*// Moving hands the buffer over; it must not throw, or a std::vector<Tensor>
 // would fall back to copying -- which does not exist.
 static_assert(std::is_nothrow_move_constructible_v<DTensor>);
 static_assert(std::is_nothrow_move_assignable_v<DTensor>);

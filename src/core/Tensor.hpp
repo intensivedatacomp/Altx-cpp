@@ -1,5 +1,7 @@
 #pragma once
 
+#include <fcntl.h>
+
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
@@ -21,6 +23,8 @@ public:
     using value_type = T;
     using allocator_type = Alloc;
     Tensor() noexcept;
+    Tensor(const Tensor &) = delete;
+    Tensor &operator=(const Tensor &) = delete;
     explicit Tensor(std::initializer_list<std::size_t> shape);
 };
 
