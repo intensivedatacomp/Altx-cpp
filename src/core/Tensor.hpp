@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <initializer_list>
+#include <span>
 
 namespace altx
 {
@@ -25,7 +26,10 @@ public:
     Tensor() noexcept;
     Tensor(const Tensor &) = delete;
     Tensor &operator=(const Tensor &) = delete;
+    Tensor(Tensor &&) noexcept;
+    Tensor &operator=(Tensor &&) noexcept;
     explicit Tensor(std::initializer_list<std::size_t> shape);
+    explicit Tensor(std::span<const std::size_t> shape);
 };
 
 }  // namespace altx

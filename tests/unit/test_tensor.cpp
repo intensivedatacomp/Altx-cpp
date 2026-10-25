@@ -60,7 +60,7 @@ static_assert(altx::HostAlloc::alignment == 64);
 static_assert(!std::is_copy_constructible_v<DTensor>);
 static_assert(!std::is_copy_assignable_v<DTensor>);
 
-/*// Moving hands the buffer over; it must not throw, or a std::vector<Tensor>
+// Moving hands the buffer over; it must not throw, or a std::vector<Tensor>
 // would fall back to copying -- which does not exist.
 static_assert(std::is_nothrow_move_constructible_v<DTensor>);
 static_assert(std::is_nothrow_move_assignable_v<DTensor>);
@@ -73,7 +73,7 @@ static_assert(
 static_assert(!std::is_convertible_v<std::span<const std::size_t>, DTensor>);
 static_assert(std::is_constructible_v<DTensor, std::span<const std::size_t>>);
 
-// The kernel-side interface cannot throw: HIP device code has no exceptions,
+/*// The kernel-side interface cannot throw: HIP device code has no exceptions,
 // and the CPU and GPU kernels share one structure.
 static_assert(noexcept(std::declval<DTensor &>()(0, 0)));
 static_assert(noexcept(std::declval<const DTensor &>()(0, 0)));
