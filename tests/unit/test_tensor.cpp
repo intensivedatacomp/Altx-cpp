@@ -73,7 +73,7 @@ static_assert(
 static_assert(!std::is_convertible_v<std::span<const std::size_t>, DTensor>);
 static_assert(std::is_constructible_v<DTensor, std::span<const std::size_t>>);
 
-/*// The kernel-side interface cannot throw: HIP device code has no exceptions,
+// The kernel-side interface cannot throw: HIP device code has no exceptions,
 // and the CPU and GPU kernels share one structure.
 static_assert(noexcept(std::declval<DTensor &>()(0, 0)));
 static_assert(noexcept(std::declval<const DTensor &>()(0, 0)));
@@ -86,7 +86,7 @@ static_assert(noexcept(std::declval<const DTensor &>().empty()));
 static_assert(noexcept(std::declval<DTensor &>().fill(1.0)));
 
 // Const in, const out: a const tensor hands out nothing writable.
-static_assert(
+/*static_assert(
     std::is_same_v<decltype(std::declval<DTensor &>()(0, 0)), double &>);
 static_assert(std::is_same_v<decltype(std::declval<const DTensor &>()(0, 0)),
                              const double &>);

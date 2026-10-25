@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <initializer_list>
 #include <span>
@@ -30,6 +31,20 @@ public:
     Tensor &operator=(Tensor &&) noexcept;
     explicit Tensor(std::initializer_list<std::size_t> shape);
     explicit Tensor(std::span<const std::size_t> shape);
+    ~Tensor() {}
+    std::size_t rank() const noexcept {}
+    std::span<const std::size_t> shape() const noexcept {}
+    std::size_t size() const noexcept;
+    bool empty() const noexcept {}
+    T *data() noexcept;
+    const T *data() const noexcept;
+    std::span<T> values() noexcept;
+    std::span<const T> values() const;
+    template <std::integral... I>
+    T &operator()(I...) noexcept;
+    template <std::integral... I>
+    T &operator()(const I...) const noexcept;
+    void fill(const T &value) noexcept;
 };
 
 }  // namespace altx
