@@ -1,10 +1,8 @@
 #pragma once
 
-#include <fcntl.h>
-
 #include <cmath>
+#include <concepts>
 #include <cstddef>
-#include <cstdio>
 #include <cstdlib>
 #include <initializer_list>
 #include <span>
@@ -43,7 +41,15 @@ public:
     template <std::integral... I>
     T &operator()(I...) noexcept;
     template <std::integral... I>
-    T &operator()(const I...) const noexcept;
+    const T &operator()(I...) const noexcept;
+    template <std::integral... I>
+    T &at(I...)
+    {
+    }
+    template <std::integral... I>
+    const T &at(I...) const
+    {
+    }
     void fill(const T &value) noexcept;
 };
 
