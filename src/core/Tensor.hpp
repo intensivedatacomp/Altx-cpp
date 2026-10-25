@@ -1,8 +1,11 @@
 #pragma once
 
+#include <bits/stdc++.h>
+
 #include <concepts>
 #include <cstddef>
 #include <cstdlib>
+#include <functional>
 #include <initializer_list>
 #include <new>
 #include <span>
@@ -34,9 +37,19 @@ public:
     Tensor &operator=(const Tensor &) = delete;
     Tensor(Tensor &&) noexcept;
     Tensor &operator=(Tensor &&) noexcept;
-    explicit Tensor(std::initializer_list<std::size_t> shape);
-    explicit Tensor(std::span<const std::size_t> shape);
-    ~Tensor() {}
+    explicit Tensor(std::initializer_list<std::size_t> shape)
+    {
+        my_size = std::reduce(shape.begin(), shape.end(), 1,
+                              std::multiplies<std::size_t>());
+        my_data = allocator_type::allocate(my_size * sizeof(T));
+    }
+    explicit Tensor(std::span<const std::size_t> shape)
+    {
+        my_size = std::reduce(shape.begin(), shape.end(), 1,
+                              std::multiplies<std::size_t>());
+        my_data = allocator_type::allocate(my_size * sizeof(T));
+    }
+    ~Tensor() { allocator_type::deallocate(my_data, my_size); }
     std::size_t rank() const noexcept {}
     std::span<const std::size_t> shape() const noexcept {}
     std::size_t size() const noexcept;
@@ -58,6 +71,10 @@ public:
     {
     }
     void fill(const T &value) noexcept;
+
+private:
+    void *my_data;
+    std::size_t my_size;
 };
 
 }  // namespace altx

@@ -169,7 +169,7 @@ TEST(HostAlloc, ReturnsAlignedMemory)
     }
 }
 
-/*/// @brief Tensor allocates once on construction, through its policy, for
+/// @brief Tensor allocates once on construction, through its policy, for
 /// exactly `size() * sizeof(T)` bytes, and gives the block back once.
 TEST(Tensor, UsesItsAllocatorPolicyOnce)
 {
@@ -185,7 +185,7 @@ TEST(Tensor, UsesItsAllocatorPolicyOnce)
 
 // --- Shape ------------------------------------------------------------------
 
-/// @brief A default-constructed tensor is empty: no rank, no elements.
+/*/// @brief A default-constructed tensor is empty: no rank, no elements.
 TEST(Tensor, DefaultIsEmpty)
 {
     const DTensor tensor;
