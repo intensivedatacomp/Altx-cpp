@@ -63,3 +63,5 @@ nullptr
 UsesItsAllocatorPolicyOnce
 sizeof
 DefaultIsEmpty
+ReportsShapeAndSize
+ConstructsFromARuntimeShape

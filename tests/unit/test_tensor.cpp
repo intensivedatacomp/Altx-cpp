@@ -185,7 +185,7 @@ TEST(Tensor, UsesItsAllocatorPolicyOnce)
 
 // --- Shape ------------------------------------------------------------------
 
-/*/// @brief A default-constructed tensor is empty: no rank, no elements.
+/// @brief A default-constructed tensor is empty: no rank, no elements.
 TEST(Tensor, DefaultIsEmpty)
 {
     const DTensor tensor;
@@ -210,7 +210,7 @@ TEST(Tensor, ReportsShapeAndSize)
     EXPECT_EQ(tensor.values().size(), std::size_t{24});
 }
 
-/// @brief A shape known only at run time -- one read from a file -- is
+/*/// @brief A shape known only at run time -- one read from a file -- is
 /// accepted as a span, and the tensor keeps its own copy of it.
 TEST(Tensor, ConstructsFromARuntimeShape)
 {

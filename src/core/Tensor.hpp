@@ -9,6 +9,7 @@
 #include <initializer_list>
 #include <new>
 #include <span>
+#include <vector>
 
 namespace altx
 {
@@ -32,32 +33,43 @@ class Tensor
 public:
     using value_type = T;
     using allocator_type = Alloc;
-    Tensor() noexcept;
+    Tensor() noexcept {}
     Tensor(const Tensor &) = delete;
     Tensor &operator=(const Tensor &) = delete;
     Tensor(Tensor &&) noexcept;
     Tensor &operator=(Tensor &&) noexcept;
     explicit Tensor(std::initializer_list<std::size_t> shape)
     {
-        my_size = std::reduce(shape.begin(), shape.end(), 1,
-                              std::multiplies<std::size_t>());
-        my_data = allocator_type::allocate(my_size * sizeof(T));
+        my_shape.assign(shape.begin(), shape.end());
+        my_rank = shape.size();
+        my_data = allocator_type::allocate(size() * sizeof(T));
+        // my_values = my_data;
     }
     explicit Tensor(std::span<const std::size_t> shape)
     {
-        my_size = std::reduce(shape.begin(), shape.end(), 1,
-                              std::multiplies<std::size_t>());
-        my_data = allocator_type::allocate(my_size * sizeof(T));
+        my_shape.assign(shape.begin(), shape.end());
+        my_rank = shape.size();
+        my_data = allocator_type::allocate(size() * sizeof(T));
+        // my_values = my_data;
     }
-    ~Tensor() { allocator_type::deallocate(my_data, my_size); }
-    std::size_t rank() const noexcept {}
-    std::span<const std::size_t> shape() const noexcept {}
-    std::size_t size() const noexcept;
-    bool empty() const noexcept {}
+    ~Tensor() { allocator_type::deallocate(my_data, size()); }
+    std::size_t rank() const noexcept { return my_shape.size(); }
+    std::span<const std::size_t> shape() const noexcept { return my_shape; }
+    std::size_t size() const noexcept
+    {
+        return empty() ? 0
+                       : std::reduce(my_shape.begin(), my_shape.end(),
+                                     static_cast<std::size_t>(1),
+                                     std::multiplies<std::size_t>());
+    }
+    bool empty() const noexcept { return my_rank == 0; }
     T *data() noexcept;
     const T *data() const noexcept;
-    std::span<T> values() noexcept;
-    std::span<const T> values() const;
+    std::span<T> values() noexcept { std::span<const T>(my_data, size()); }
+    std::span<const T> values() const
+    {
+        return std::span<const T>(my_data, size());
+    }
     template <std::integral... I>
     T &operator()(I...) noexcept;
     template <std::integral... I>
@@ -74,7 +86,9 @@ public:
 
 private:
     void *my_data;
-    std::size_t my_size;
+    std::size_t my_rank = 0;
+    std::vector<std::size_t> my_shape;
+    std::span<T> my_values;
 };
 
 }  // namespace altx
