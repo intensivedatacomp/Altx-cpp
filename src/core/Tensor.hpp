@@ -1,10 +1,10 @@
 #pragma once
 
-#include <cmath>
 #include <concepts>
 #include <cstddef>
 #include <cstdlib>
 #include <initializer_list>
+#include <new>
 #include <span>
 
 namespace altx
@@ -13,8 +13,15 @@ namespace altx
 struct HostAlloc
 {
     static constexpr std::size_t alignment = 64;
-    static void *allocate(std::size_t bytes);  // throws std::bad_alloc
-    static void deallocate(void *pointer, std::size_t bytes) noexcept;
+    static void *allocate(std::size_t bytes)  // throws std::bad_alloc
+    {
+        return ::operator new(bytes, std::align_val_t(alignment));
+    }
+    static void deallocate(void *pointer,
+                           std::size_t bytes [[maybe_unused]]) noexcept
+    {
+        ::operator delete(pointer, std::align_val_t(alignment));
+    }
 };
 template <typename T, typename Alloc = HostAlloc>
 class Tensor

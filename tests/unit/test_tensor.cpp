@@ -86,7 +86,7 @@ static_assert(noexcept(std::declval<const DTensor &>().empty()));
 static_assert(noexcept(std::declval<DTensor &>().fill(1.0)));
 
 // Const in, const out: a const tensor hands out nothing writable.
-/*static_assert(
+static_assert(
     std::is_same_v<decltype(std::declval<DTensor &>()(0, 0)), double &>);
 static_assert(std::is_same_v<decltype(std::declval<const DTensor &>()(0, 0)),
                              const double &>);
@@ -102,8 +102,8 @@ static_assert(std::is_same_v<decltype(std::declval<const DTensor &>().values()),
                              std::span<const double>>);
 static_assert(std::is_same_v<decltype(std::declval<const DTensor &>().shape()),
                              std::span<const std::size_t>>);
-*/
-/*/// @brief Whether @p pointer is a multiple of @p alignment.
+
+/// @brief Whether @p pointer is a multiple of @p alignment.
 /// @param pointer The address to check.
 /// @param alignment A power of two, in bytes.
 /// @return `true` if the address is aligned.
@@ -169,7 +169,7 @@ TEST(HostAlloc, ReturnsAlignedMemory)
     }
 }
 
-/// @brief Tensor allocates once on construction, through its policy, for
+/*/// @brief Tensor allocates once on construction, through its policy, for
 /// exactly `size() * sizeof(T)` bytes, and gives the block back once.
 TEST(Tensor, UsesItsAllocatorPolicyOnce)
 {
