@@ -2,6 +2,7 @@
 
 #include <bits/stdc++.h>
 
+#include <algorithm>
 #include <concepts>
 #include <cstddef>
 #include <cstdlib>
@@ -10,6 +11,8 @@
 #include <new>
 #include <span>
 #include <vector>
+
+#include "core/Exceptions.hpp"
 
 namespace altx
 {
@@ -40,6 +43,10 @@ public:
     Tensor &operator=(Tensor &&) noexcept;
     explicit Tensor(std::initializer_list<std::size_t> shape)
     {
+        if (shape.size() == 0)
+        {
+            throw Error("The shape of the tensor cannot be empty.");
+        }
         my_shape.assign(shape.begin(), shape.end());
         my_rank = shape.size();
         my_data =
@@ -48,6 +55,10 @@ public:
     }
     explicit Tensor(std::span<const std::size_t> shape)
     {
+        if (shape.size() == 0)
+        {
+            throw Error("The shape of the tensor cannot be empty.");
+        }
         my_shape.assign(shape.begin(), shape.end());
         my_rank = shape.size();
         my_data =
@@ -64,10 +75,17 @@ public:
                                      static_cast<std::size_t>(1),
                                      std::multiplies<std::size_t>());
     }
-    bool empty() const noexcept { return my_rank == 0; }
+    bool empty() const noexcept
+    {
+        if (std::find(my_shape.begin(), my_shape.end(), 0) != my_shape.end())
+        {
+            return true;
+        }
+        return my_rank == 0;
+    }
     T *data() noexcept;
     const T *data() const noexcept;
-    std::span<T> values() noexcept { std::span<const T>(my_data, size()); }
+    std::span<T> values() noexcept { return std::span<T>(my_data, size()); }
     std::span<const T> values() const
     {
         return std::span<const T>(my_data, size());

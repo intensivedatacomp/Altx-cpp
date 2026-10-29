@@ -65,3 +65,16 @@ sizeof
 DefaultIsEmpty
 ReportsShapeAndSize
 ConstructsFromARuntimeShape
+DevelopmentPlan
+md
+hpp
+HipAlloc
+ZeroExtentGivesNoElements
+RejectsAnEmptyShape
+RejectsAShapeThatOverflows
+constexpr
+kMax
+StartsZeroed
+DataIsAligned
+FTensor
+ValuesSpansTheData

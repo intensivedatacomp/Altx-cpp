@@ -24,17 +24,17 @@
 
 #include <gtest/gtest.h>
 
-#include <array>
-#include <concepts>
+// #include <array>
+// #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
-#include <limits>
-#include <new>
+// #include <limits>
+// #include <new>
 #include <span>
 #include <type_traits>
 #include <utility>
-#include <vector>
+// #include <vector>
 
 #include "core/Exceptions.hpp"
 #include "core/Tensor.hpp"
@@ -210,7 +210,7 @@ TEST(Tensor, ReportsShapeAndSize)
     EXPECT_EQ(tensor.values().size(), std::size_t{24});
 }
 
-/*/// @brief A shape known only at run time -- one read from a file -- is
+/// @brief A shape known only at run time -- one read from a file -- is
 /// accepted as a span, and the tensor keeps its own copy of it.
 TEST(Tensor, ConstructsFromARuntimeShape)
 {
@@ -244,7 +244,7 @@ TEST(Tensor, RejectsAnEmptyShape)
     const std::vector<std::size_t> none;
     EXPECT_THROW(DTensor{std::span<const std::size_t>(none)}, altx::Error);
 }
-
+/*
 /// @brief A shape whose element count, or byte count, does not fit in a
 /// `std::size_t` is rejected rather than wrapped around to a small one.
 TEST(Tensor, RejectsAShapeThatOverflows)
