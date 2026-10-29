@@ -372,7 +372,7 @@ TEST(Tensor, RowMajorWritesFillTheBufferInOrder)
     }
 }
 
-/*/// @brief The `(m, l, n_laws)` layout of `P`: each channel's laws are one
+/// @brief The `(m, l, n_laws)` layout of `P`: each channel's laws are one
 /// contiguous `l x n_laws` row-major matrix with leading dimension `n_laws`,
 /// the channels one after another -- what `gemm` takes without a copy.
 TEST(Tensor, ChannelOutermostLayoutOfP)
@@ -459,7 +459,8 @@ TEST(Tensor, AtOnAnEmptyTensorThrows)
     EXPECT_THROW(zero.at(0, 0), altx::Error);
 }
 
-// --- Ownership --------------------------------------------------------------
+/*// --- Ownership
+--------------------------------------------------------------
 
 /// @brief Moving hands over the buffer itself: same address, same shape, same
 /// values, and the source is left empty.

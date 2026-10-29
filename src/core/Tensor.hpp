@@ -140,7 +140,7 @@ private:
     }
 
     template <std::integral... I>
-    void validate_offset(I... idx)
+    void validate_offset(I... idx) const
     {
         if (sizeof...(I) != rank())
         {
@@ -164,7 +164,7 @@ private:
         }
     }
 
-    void check_input_size(std::span<const std::size_t> &shape)
+    void check_input_size(std::span<const std::size_t> shape) const
     {
         if (shape.size() == 0)
         {
