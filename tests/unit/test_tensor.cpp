@@ -348,7 +348,7 @@ TEST(Tensor, IndexesRankTwoRowMajor)
     }
 }
 
-/*/// @brief Writing through `operator()` in row-major order fills the flat
+/// @brief Writing through `operator()` in row-major order fills the flat
 /// buffer in order -- the layout a file reader or BLAS sees.
 TEST(Tensor, RowMajorWritesFillTheBufferInOrder)
 {
@@ -372,7 +372,7 @@ TEST(Tensor, RowMajorWritesFillTheBufferInOrder)
     }
 }
 
-/// @brief The `(m, l, n_laws)` layout of `P`: each channel's laws are one
+/*/// @brief The `(m, l, n_laws)` layout of `P`: each channel's laws are one
 /// contiguous `l x n_laws` row-major matrix with leading dimension `n_laws`,
 /// the channels one after another -- what `gemm` takes without a copy.
 TEST(Tensor, ChannelOutermostLayoutOfP)

@@ -10,7 +10,6 @@
 #include <format>
 #include <functional>
 #include <initializer_list>
-#include <iostream>
 #include <limits>
 #include <new>
 #include <span>
@@ -91,14 +90,21 @@ public:
         return my_data[calculate_offset(idx...)];
     }
     template <std::integral... I>
-    const T &operator()(I...) const noexcept;
-    template <std::integral... I>
-    T &at(I...)
+    const T &operator()(I... idx) const noexcept
     {
+        return my_data[calculate_offset(idx...)];
     }
     template <std::integral... I>
-    const T &at(I...) const
+    T &at(I... idx)
     {
+        validate_offset(idx...);
+        return my_data[calculate_offset(idx...)];
+    }
+    template <std::integral... I>
+    const T &at(I... idx) const
+    {
+        validate_offset(idx...);
+        return my_data[calculate_offset(idx...)];
     }
     void fill(const T &value) noexcept
     {
@@ -115,7 +121,26 @@ private:
     std::span<T> my_values;
 
     template <std::integral... I>
-    std::size_t calculate_offset(I... idx)
+    std::size_t calculate_offset(I... idx) const
+    {
+        std::array<std::size_t, sizeof...(I)> indices = {
+            static_cast<std::size_t>(idx)...};
+        std::size_t offset = 0;
+        for (std::size_t i = 0; i < sizeof...(I) - 1; i++)
+        {
+            std::size_t loc_offset = 1;
+            for (std::size_t j = i; j < sizeof...(I) - 1; j++)
+            {
+                loc_offset *= my_shape[j + 1];
+            }
+            offset += loc_offset * indices[i];
+        }
+        offset += indices[sizeof...(I) - 1];
+        return offset;
+    }
+
+    template <std::integral... I>
+    void validate_offset(I... idx)
     {
         if (sizeof...(I) != rank())
         {
@@ -124,22 +149,19 @@ private:
                             "the rank {} of the tensor.",
                             sizeof...(I), rank()));
         }
+
         std::array<std::size_t, sizeof...(I)> indices = {
             static_cast<std::size_t>(idx)...};
-        std::size_t offset = 0;
-        for (std::size_t i = 0; i < sizeof...(I) - 1; i++)
+        for (std::size_t i = 0; i < sizeof...(I); i++)
         {
-            offset += my_shape[i + 1] * indices[i];
+            if (indices[i] >= my_shape[i])
+            {
+                throw Error(
+                    std::format("The required index {} is greater than the "
+                                "size of the tensor {} at index {}",
+                                indices[i], my_shape[i], i));
+            }
         }
-        offset += indices[sizeof...(I) - 1];
-        if (offset >= size())
-        {
-            throw Error(
-                std::format("The required offset {} is greater than the size "
-                            "{} of the tensor",
-                            offset, size()));
-        }
-        return offset;
     }
 
     void check_input_size(std::span<const std::size_t> &shape)
