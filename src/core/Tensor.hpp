@@ -42,14 +42,16 @@ public:
     {
         my_shape.assign(shape.begin(), shape.end());
         my_rank = shape.size();
-        my_data = allocator_type::allocate(size() * sizeof(T));
+        my_data =
+            static_cast<T *>(allocator_type::allocate(size() * sizeof(T)));
         // my_values = my_data;
     }
     explicit Tensor(std::span<const std::size_t> shape)
     {
         my_shape.assign(shape.begin(), shape.end());
         my_rank = shape.size();
-        my_data = allocator_type::allocate(size() * sizeof(T));
+        my_data =
+            static_cast<T *>(allocator_type::allocate(size() * sizeof(T)));
         // my_values = my_data;
     }
     ~Tensor() { allocator_type::deallocate(my_data, size()); }
@@ -85,7 +87,7 @@ public:
     void fill(const T &value) noexcept;
 
 private:
-    void *my_data;
+    T *my_data = nullptr;
     std::size_t my_rank = 0;
     std::vector<std::size_t> my_shape;
     std::span<T> my_values;
