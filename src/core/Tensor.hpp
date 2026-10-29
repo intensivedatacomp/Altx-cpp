@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bits/stdc++.h>
+#include <fcntl.h>
 
 #include <algorithm>
 #include <concepts>
@@ -13,6 +14,7 @@
 #include <limits>
 #include <new>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include "core/Exceptions.hpp"
@@ -42,8 +44,17 @@ public:
     Tensor() noexcept {}
     Tensor(const Tensor &) = delete;
     Tensor &operator=(const Tensor &) = delete;
-    Tensor(Tensor &&) noexcept;
-    Tensor &operator=(Tensor &&) noexcept;
+    Tensor(Tensor &&other) noexcept
+        : my_data(std::exchange(other.my_data, nullptr)),
+          my_shape(std::move(other.my_shape))
+    {
+    }
+    Tensor &operator=(Tensor &&other) noexcept
+    {
+        my_data = std::exchange(other.my_data, nullptr);
+        my_shape = std::move(other.my_shape);
+        return *this;
+    }
     explicit Tensor(std::initializer_list<std::size_t> shape)
         : Tensor(std::span<const std::size_t>(shape.begin(), shape.size()))
     {
@@ -53,13 +64,16 @@ public:
         check_input_size(shape);
 
         my_shape.assign(shape.begin(), shape.end());
-        my_rank = shape.size();
         my_data =
             static_cast<T *>(allocator_type::allocate(size() * sizeof(T)));
 
         fill(0);
     }
-    ~Tensor() { allocator_type::deallocate(my_data, size()); }
+    ~Tensor()
+    {
+        allocator_type::deallocate(my_data, size());
+        my_shape.clear();
+    }
     std::size_t rank() const noexcept { return my_shape.size(); }
     std::span<const std::size_t> shape() const noexcept { return my_shape; }
     std::size_t size() const noexcept
@@ -75,7 +89,7 @@ public:
         {
             return true;
         }
-        return my_rank == 0;
+        return rank() == 0;
     }
     T *data() noexcept { return my_data; }
     const T *data() const noexcept { return my_data; }
@@ -116,7 +130,6 @@ public:
 
 private:
     T *my_data = nullptr;
-    std::size_t my_rank = 0;
     std::vector<std::size_t> my_shape;
     std::span<T> my_values;
 

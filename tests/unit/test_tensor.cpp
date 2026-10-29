@@ -459,8 +459,8 @@ TEST(Tensor, AtOnAnEmptyTensorThrows)
     EXPECT_THROW(zero.at(0, 0), altx::Error);
 }
 
-/*// --- Ownership
---------------------------------------------------------------
+// --- Ownership
+// --------------------------------------------------------------
 
 /// @brief Moving hands over the buffer itself: same address, same shape, same
 /// values, and the source is left empty.
@@ -531,5 +531,5 @@ TEST(Tensor, LivesInAVector)
         EXPECT_EQ(tensors[i](i, 1), static_cast<double>(i + 1));
     }
 }
-*/
+
 }  // namespace
