@@ -318,8 +318,8 @@ TEST(Tensor, TensorsAreIndependent)
     }
 }
 
-/*// --- Row-major indexing
------------------------------------------------------
+// --- Row-major indexing
+//-----------------------------------------------------
 
 /// @brief Rank 1: index `i` is element `i`.
 TEST(Tensor, IndexesRankOne)
@@ -348,7 +348,7 @@ TEST(Tensor, IndexesRankTwoRowMajor)
     }
 }
 
-/// @brief Writing through `operator()` in row-major order fills the flat
+/*/// @brief Writing through `operator()` in row-major order fills the flat
 /// buffer in order -- the layout a file reader or BLAS sees.
 TEST(Tensor, RowMajorWritesFillTheBufferInOrder)
 {

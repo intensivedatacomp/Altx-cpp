@@ -4,10 +4,13 @@
 
 #include <algorithm>
 #include <concepts>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdlib>
+#include <format>
 #include <functional>
 #include <initializer_list>
+#include <iostream>
 #include <limits>
 #include <new>
 #include <span>
@@ -83,7 +86,10 @@ public:
         return std::span<const T>(my_data, size());
     }
     template <std::integral... I>
-    T &operator()(I...) noexcept;
+    T &operator()(I... idx) noexcept
+    {
+        return my_data[calculate_offset(idx...)];
+    }
     template <std::integral... I>
     const T &operator()(I...) const noexcept;
     template <std::integral... I>
@@ -107,6 +113,34 @@ private:
     std::size_t my_rank = 0;
     std::vector<std::size_t> my_shape;
     std::span<T> my_values;
+
+    template <std::integral... I>
+    std::size_t calculate_offset(I... idx)
+    {
+        if (sizeof...(I) != rank())
+        {
+            throw Error(
+                std::format("The number of indices {} has to be the same as "
+                            "the rank {} of the tensor.",
+                            sizeof...(I), rank()));
+        }
+        std::array<std::size_t, sizeof...(I)> indices = {
+            static_cast<std::size_t>(idx)...};
+        std::size_t offset = 0;
+        for (std::size_t i = 0; i < sizeof...(I) - 1; i++)
+        {
+            offset += my_shape[i + 1] * indices[i];
+        }
+        offset += indices[sizeof...(I) - 1];
+        if (offset >= size())
+        {
+            throw Error(
+                std::format("The required offset {} is greater than the size "
+                            "{} of the tensor",
+                            offset, size()));
+        }
+        return offset;
+    }
 
     void check_input_size(std::span<const std::size_t> &shape)
     {
