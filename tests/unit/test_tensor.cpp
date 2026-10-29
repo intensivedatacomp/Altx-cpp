@@ -244,7 +244,7 @@ TEST(Tensor, RejectsAnEmptyShape)
     const std::vector<std::size_t> none;
     EXPECT_THROW(DTensor{std::span<const std::size_t>(none)}, altx::Error);
 }
-/*
+
 /// @brief A shape whose element count, or byte count, does not fit in a
 /// `std::size_t` is rejected rather than wrapped around to a small one.
 TEST(Tensor, RejectsAShapeThatOverflows)
@@ -269,7 +269,7 @@ TEST(Tensor, StartsZeroed)
     }
 }
 
-/// @brief The data is 64-byte aligned for both scalar types and for awkward
+/*/// @brief The data is 64-byte aligned for both scalar types and for awkward
 /// sizes, so every row of a BLAS operand starts on a cache line boundary.
 TEST(Tensor, DataIsAligned)
 {

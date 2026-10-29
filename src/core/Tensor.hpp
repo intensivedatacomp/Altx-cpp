@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <functional>
 #include <initializer_list>
+#include <limits>
 #include <new>
 #include <span>
 #include <vector>
@@ -42,28 +43,19 @@ public:
     Tensor(Tensor &&) noexcept;
     Tensor &operator=(Tensor &&) noexcept;
     explicit Tensor(std::initializer_list<std::size_t> shape)
+        : Tensor(std::span<const std::size_t>(shape.begin(), shape.size()))
     {
-        if (shape.size() == 0)
-        {
-            throw Error("The shape of the tensor cannot be empty.");
-        }
-        my_shape.assign(shape.begin(), shape.end());
-        my_rank = shape.size();
-        my_data =
-            static_cast<T *>(allocator_type::allocate(size() * sizeof(T)));
-        // my_values = my_data;
     }
     explicit Tensor(std::span<const std::size_t> shape)
     {
-        if (shape.size() == 0)
-        {
-            throw Error("The shape of the tensor cannot be empty.");
-        }
+        check_input_size(shape);
+
         my_shape.assign(shape.begin(), shape.end());
         my_rank = shape.size();
         my_data =
             static_cast<T *>(allocator_type::allocate(size() * sizeof(T)));
-        // my_values = my_data;
+
+        fill(0);
     }
     ~Tensor() { allocator_type::deallocate(my_data, size()); }
     std::size_t rank() const noexcept { return my_shape.size(); }
@@ -102,13 +94,45 @@ public:
     const T &at(I...) const
     {
     }
-    void fill(const T &value) noexcept;
+    void fill(const T &value) noexcept
+    {
+        for (std::size_t i = 0; i < size(); i++)
+        {
+            my_data[i] = value;
+        }
+    }
 
 private:
     T *my_data = nullptr;
     std::size_t my_rank = 0;
     std::vector<std::size_t> my_shape;
     std::span<T> my_values;
+
+    void check_input_size(std::span<const std::size_t> &shape)
+    {
+        if (shape.size() == 0)
+        {
+            throw Error("The shape of the tensor cannot be empty.");
+        }
+
+        std::size_t prod = 1;
+        for (std::size_t i = 0; i < shape.size(); i++)
+        {
+            if (shape[i] > std::numeric_limits<std::size_t>::max() / prod)
+            {
+                throw Error("Too many elements are requested for the tensor.");
+            }
+            if (shape[i] * sizeof(T) >
+                std::numeric_limits<std::size_t>::max() / (prod * sizeof(T)))
+            {
+                throw Error("Too many byte are requested for the tensor.");
+            }
+            if (shape[i] != 0)
+            {
+                prod *= shape[i];
+            }
+        }
+    }
 };
 
 }  // namespace altx
