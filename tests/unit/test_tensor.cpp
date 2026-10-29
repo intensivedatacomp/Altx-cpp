@@ -269,7 +269,7 @@ TEST(Tensor, StartsZeroed)
     }
 }
 
-/*/// @brief The data is 64-byte aligned for both scalar types and for awkward
+/// @brief The data is 64-byte aligned for both scalar types and for awkward
 /// sizes, so every row of a BLAS operand starts on a cache line boundary.
 TEST(Tensor, DataIsAligned)
 {
@@ -318,7 +318,8 @@ TEST(Tensor, TensorsAreIndependent)
     }
 }
 
-// --- Row-major indexing -----------------------------------------------------
+/*// --- Row-major indexing
+-----------------------------------------------------
 
 /// @brief Rank 1: index `i` is element `i`.
 TEST(Tensor, IndexesRankOne)

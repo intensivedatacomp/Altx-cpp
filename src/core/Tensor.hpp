@@ -75,8 +75,8 @@ public:
         }
         return my_rank == 0;
     }
-    T *data() noexcept;
-    const T *data() const noexcept;
+    T *data() noexcept { return my_data; }
+    const T *data() const noexcept { return my_data; }
     std::span<T> values() noexcept { return std::span<T>(my_data, size()); }
     std::span<const T> values() const
     {
