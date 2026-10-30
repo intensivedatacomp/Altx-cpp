@@ -34,7 +34,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 # signal came from the Security tab, where the SARIF upload deliberately
 # reports every severity. Noticing that by hand is precisely what the weekly
 # run now removes.
-ARG APT_SNAPSHOT=2026-09-13
+#
+# 2026-10-30: libbrotli1 1.1.0-2build2 against 1.1.0-2ubuntu0.1 in the archive
+# (CVE-2026-111497, HIGH). The weekly run had not yet picked it up, and a change
+# to dev.Dockerfile rebuilt runtime-cpu on top of the stale base, so the gate
+# failed on a branch. This is the case the comment above describes: a floor
+# bumped by hand, on this tree.
+ARG APT_SNAPSHOT=2026-10-30
 RUN echo "apt snapshot ${APT_SNAPSHOT}" && \
     apt-get update && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends \
