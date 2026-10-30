@@ -17,6 +17,7 @@ add_executable(
     unit/test_smoke.cpp
     unit/test_exceptions.cpp
     unit/test_logger.cpp
+    unit/test_tensor.cpp
 )
 
 target_link_libraries(

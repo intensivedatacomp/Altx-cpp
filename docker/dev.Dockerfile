@@ -65,6 +65,7 @@ RUN echo "apt snapshot ${APT_SNAPSHOT}" && \
     doxygen \
     graphviz \
     lcov \
+    libjson-xs-perl \
     curl \
     wget \
     ca-certificates \
@@ -107,7 +108,10 @@ RUN update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-18 100 
 # ---------------------------
 # uv config
 # ---------------------------
-COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /usr/local/bin/uv
+# 0.13.6, not 0.12.x: uv statically links rustls, and every 0.12 release
+# carries a version before the fix for GHSA-2mjx-qc3c-rqvc (rustls 0.23.45,
+# first bundled in uv 0.13.0).
+COPY --from=ghcr.io/astral-sh/uv:0.13.6 /uv /usr/local/bin/uv
 
 # UV_LINK_MODE=copy is what makes `uv cache clean` safe further down: the
 # default hardlinks installed files back to ~/.cache/uv, so deleting the cache
