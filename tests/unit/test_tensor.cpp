@@ -24,14 +24,12 @@
 
 #include <gtest/gtest.h>
 
-// #include <array>
-// #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <limits>
-// #include <new>
 #include <span>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -51,6 +49,38 @@ using FTensor = altx::Tensor<float>;
 static_assert(std::is_same_v<DTensor, altx::Tensor<double, altx::HostAlloc>>);
 static_assert(std::is_same_v<DTensor::value_type, double>);
 static_assert(std::is_same_v<DTensor::allocator_type, altx::HostAlloc>);
+
+/// @brief Whether `altx::Tensor<T>` is a valid type at all.
+///
+/// A constraint on a class template makes a specialisation that fails it
+/// ill-formed when it is named, which a requires-expression can observe.
+template <typename T>
+concept NamesATensor = requires { typename altx::Tensor<T>; };
+
+/// @brief A struct that is copyable as bytes, but not arithmetic.
+struct PlainPair
+{
+    /// @brief First member.
+    double first;
+    /// @brief Second member.
+    double second;
+};
+
+// Elements are built-in numbers: the scalar types, and the integer types the
+// file holds (`P_classes`, `lengths`).
+static_assert(NamesATensor<double>);
+static_assert(NamesATensor<float>);
+static_assert(NamesATensor<int>);
+static_assert(NamesATensor<std::int32_t>);
+static_assert(NamesATensor<std::size_t>);
+
+// A tensor never runs constructors or destructors, so a type that has
+// meaningful ones must not compile.
+static_assert(!NamesATensor<std::string>);
+static_assert(!NamesATensor<std::vector<double>>);
+// Narrower still, by choice: not even a struct of numbers. MPI and HDF5 would
+// need a hand-built datatype for it.
+static_assert(!NamesATensor<PlainPair>);
 
 // 64 bytes is a cache line and the widest SIMD register (AVX-512).
 static_assert(altx::HostAlloc::alignment == 64);
@@ -323,8 +353,7 @@ TEST(Tensor, TensorsAreIndependent)
     }
 }
 
-// --- Row-major indexing
-//-----------------------------------------------------
+// --- Row-major indexing -----------------------------------------------------
 
 /// @brief Rank 1: index `i` is element `i`.
 TEST(Tensor, IndexesRankOne)
@@ -468,8 +497,7 @@ TEST(Tensor, AtOnAnEmptyTensorThrows)
     EXPECT_THROW(zero.at(0, 0), altx::Error);
 }
 
-// --- Ownership
-// --------------------------------------------------------------
+// --- Ownership --------------------------------------------------------------
 
 /// @brief Moving hands over the buffer itself: same address, same shape, same
 /// values, and the source is left empty.

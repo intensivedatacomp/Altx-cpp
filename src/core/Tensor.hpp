@@ -80,6 +80,18 @@ struct HostAlloc
     }
 };
 
+/// @brief The types a Tensor may hold: the built-in integer and floating-point
+/// types.
+///
+/// A tensor never runs an element's constructor or destructor -- it assigns
+/// into raw memory and returns the bytes untouched -- and MPI, HDF5 and HIP
+/// copy its elements as bytes. A type with a constructor or destructor that
+/// does something, such as `std::string`, would make each of those undefined
+/// behaviour, so it is rejected when the tensor type is named.
+/// @tparam T The candidate element type.
+template <typename T>
+concept arithmetic = std::is_arithmetic_v<T>;
+
 /// @brief An owning, row-major multi-dimensional array whose rank is chosen
 /// at run time.
 ///
@@ -91,12 +103,10 @@ struct HostAlloc
 /// A tensor is either *empty* -- default-constructed, moved from, or with an
 /// extent of zero -- or owns exactly one block obtained from @p Alloc.
 ///
-/// @tparam T The element type; `Real` for the algorithm.
+/// @tparam T The element type; `Real` for the algorithm. Must satisfy
+///   altx::arithmetic.
 /// @tparam Alloc The allocator policy: static `allocate(bytes)` and
 ///   `deallocate(pointer, bytes) noexcept`. HostAlloc by default.
-template <typename T>
-concept arithmetic = requires { requires std::is_arithmetic_v<T>; };
-
 template <typename T, typename Alloc = HostAlloc>
     requires arithmetic<T>
 class Tensor
