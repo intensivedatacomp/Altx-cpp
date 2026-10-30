@@ -101,3 +101,15 @@ NOLINTNEXTLINE
 MoveAssignmentReleasesTheOldBuffer
 MovedFromTensorIsReusable
 LivesInAVector
+cpp
+MPI
+HDF5
+hipMalloc
+d1
+d1
+i0
+d0
+i1
+i2
+d2
+tparam

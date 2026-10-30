@@ -29,12 +29,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
-// #include <limits>
+#include <limits>
 // #include <new>
 #include <span>
 #include <type_traits>
 #include <utility>
-// #include <vector>
+#include <vector>
 
 #include "core/Exceptions.hpp"
 #include "core/Tensor.hpp"
@@ -255,6 +255,11 @@ TEST(Tensor, RejectsAShapeThatOverflows)
                  altx::Error);
     // The element count fits; the byte count does not.
     EXPECT_THROW((DTensor{kMax / 2}), altx::Error);
+    // 2^62 doubles are 2^65 bytes, which wraps around to exactly zero: a
+    // check on the wrapped value accepts it and allocates nothing.
+    EXPECT_THROW((DTensor{std::size_t{1} << 62}), altx::Error);
+    EXPECT_THROW((FTensor{std::size_t{1} << 31, std::size_t{1} << 31}),
+                 altx::Error);
 }
 
 // --- Storage ----------------------------------------------------------------
@@ -455,6 +460,10 @@ TEST(Tensor, AtOnAnEmptyTensorThrows)
 {
     DTensor none;
     EXPECT_THROW(none.at(0), altx::Error);
+    // No indices matches the rank of an empty tensor, but still reaches no
+    // element.
+    EXPECT_THROW(none.at(), altx::Error);
+    EXPECT_THROW(std::as_const(none).at(), altx::Error);
     DTensor zero{2, 0};
     EXPECT_THROW(zero.at(0, 0), altx::Error);
 }
