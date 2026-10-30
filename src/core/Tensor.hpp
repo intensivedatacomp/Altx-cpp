@@ -34,11 +34,11 @@
 #include <format>
 #include <functional>
 #include <initializer_list>
+#include <iostream>
 #include <limits>
 #include <new>
 #include <numeric>
 #include <span>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -286,16 +286,10 @@ private:
         std::array<std::size_t, sizeof...(I)> indices = {
             static_cast<std::size_t>(idx)...};
         std::size_t offset = 0;
-        for (std::size_t i = 0; i < sizeof...(I) - 1; i++)
+        for (std::size_t i = 0; i < sizeof...(I); i++)
         {
-            std::size_t loc_offset = 1;
-            for (std::size_t j = i; j < sizeof...(I) - 1; j++)
-            {
-                loc_offset *= my_shape[j + 1];
-            }
-            offset += loc_offset * indices[i];
+            offset = (offset * my_shape[i]) + indices[i];
         }
-        offset += indices[sizeof...(I) - 1];
         return offset;
     }
 
