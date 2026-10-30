@@ -34,11 +34,11 @@
 #include <format>
 #include <functional>
 #include <initializer_list>
-#include <iostream>
 #include <limits>
 #include <new>
 #include <numeric>
 #include <span>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -94,7 +94,11 @@ struct HostAlloc
 /// @tparam T The element type; `Real` for the algorithm.
 /// @tparam Alloc The allocator policy: static `allocate(bytes)` and
 ///   `deallocate(pointer, bytes) noexcept`. HostAlloc by default.
+template <typename T>
+concept arithmetic = requires { requires std::is_arithmetic_v<T>; };
+
 template <typename T, typename Alloc = HostAlloc>
+    requires arithmetic<T>
 class Tensor
 {
 public:
