@@ -65,6 +65,7 @@ RUN echo "apt snapshot ${APT_SNAPSHOT}" && \
     doxygen \
     graphviz \
     lcov \
+    libjson-xs-perl \
     curl \
     wget \
     ca-certificates \
