@@ -344,32 +344,6 @@ private:
         {
             throw Error("The shape of the tensor cannot be empty.");
         }
-        if (std::is_same<T, double>::value)
-        {
-            for (std::size_t i = 0; i < shape.size(); i++)
-            {
-                if (shape[i] == std::size_t{1} << 62)
-                {
-                    throw Error(
-                        std::format("The requested shape of the tensor at "
-                                    "index {} i is too large.",
-                                    i));
-                }
-            }
-        }
-        if (std::is_same<T, float>::value)
-        {
-            for (std::size_t i = 0; i < shape.size(); i++)
-            {
-                if (shape[i] == std::size_t{1} << 31)
-                {
-                    throw Error(
-                        std::format("The requested shape of the tensor at "
-                                    "index {} i is too large.",
-                                    i));
-                }
-            }
-        }
 
         std::size_t prod = 1;
         for (std::size_t i = 0; i < shape.size(); i++)
@@ -378,15 +352,14 @@ private:
             {
                 throw Error("Too many elements are requested for the tensor.");
             }
-            if (shape[i] * sizeof(T) >
-                std::numeric_limits<std::size_t>::max() / (prod * sizeof(T)))
-            {
-                throw Error("Too many byte are requested for the tensor.");
-            }
             if (shape[i] != 0)
             {
                 prod *= shape[i];
             }
+        }
+        if (prod > std::numeric_limits<std::size_t>::max() / sizeof(T))
+        {
+            throw Error("Too many byte are requested for the tensor.");
         }
     }
 
