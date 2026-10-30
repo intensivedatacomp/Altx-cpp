@@ -64,7 +64,13 @@ INFO="${OUTPUT_DIR}/coverage.info"
 #              pre-populated FetchContent cache rather than built here.
 #   empty      no records at all, which `--capture --initial` legitimately
 #              produces before anything has run.
-IGNORE=mismatch,unused,empty
+#
+# Naming a category once only downgrades it to a warning, which lcov still
+# prints; naming it twice silences it. `mismatch` is named twice because it
+# fires for every TEST() in every test file -- hundreds of lines per run that
+# would bury any warning worth reading. The other two stay audible: they are
+# rare, and a surprising one is worth seeing.
+IGNORE=mismatch,mismatch,unused,empty
 
 # Two captures, because a translation unit that is never executed writes no
 # .gcda at all and would simply be missing from the report -- the least covered

@@ -186,7 +186,7 @@ jobs:
             echo "## Coverage: ${{ steps.coverage.outputs.percentage }}%"
             echo
             echo '```'
-            lcov --quiet --ignore-errors mismatch,unused,empty \
+            lcov --quiet --ignore-errors mismatch,mismatch,unused,empty \
                  --list coverage/coverage.info
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
