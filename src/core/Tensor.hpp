@@ -51,8 +51,12 @@ public:
     }
     Tensor &operator=(Tensor &&other) noexcept
     {
+        if (this != &other)
+        {
+            release();
+        }
         my_data = std::exchange(other.my_data, nullptr);
-        my_shape = std::move(other.my_shape);
+        my_shape = std::exchange(other.my_shape, {});
         return *this;
     }
     explicit Tensor(std::initializer_list<std::size_t> shape)
@@ -69,11 +73,7 @@ public:
 
         fill(0);
     }
-    ~Tensor()
-    {
-        allocator_type::deallocate(my_data, size());
-        my_shape.clear();
-    }
+    ~Tensor() { release(); }
     std::size_t rank() const noexcept { return my_shape.size(); }
     std::span<const std::size_t> shape() const noexcept { return my_shape; }
     std::size_t size() const noexcept
@@ -200,6 +200,16 @@ private:
             {
                 prod *= shape[i];
             }
+        }
+    }
+
+    void release() noexcept
+    {
+        if (my_data != nullptr)
+        {
+            allocator_type::deallocate(my_data, size() * sizeof(T));
+            my_data = nullptr;
+            my_shape.clear();
         }
     }
 };
