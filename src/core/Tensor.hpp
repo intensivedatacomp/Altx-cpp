@@ -104,7 +104,7 @@ public:
     using allocator_type = Alloc;
 
     /// @brief An empty tensor: rank 0, no elements, no memory.
-    Tensor() noexcept {}
+    Tensor() noexcept = default;
 
     /// @brief Not copyable: a copy could be gigabytes, or device memory.
     Tensor(const Tensor &) = delete;
@@ -128,9 +128,9 @@ public:
         if (this != &other)
         {
             release();
+            my_data = std::exchange(other.my_data, nullptr);
+            my_shape = std::exchange(other.my_shape, {});
         }
-        my_data = std::exchange(other.my_data, nullptr);
-        my_shape = std::exchange(other.my_shape, {});
         return *this;
     }
 
@@ -262,7 +262,8 @@ public:
     /// @param value The value to store.
     void fill(const T &value) noexcept
     {
-        for (std::size_t i = 0; i < size(); i++)
+        std::size_t tensor_size = size();
+        for (std::size_t i = 0; i < tensor_size; i++)
         {
             my_data[i] = value;
         }
