@@ -27,19 +27,16 @@
 
 #pragma once
 
-#include <bits/stdc++.h>
-#include <fcntl.h>
-
 #include <algorithm>
+#include <array>
 #include <concepts>
-#include <cstdarg>
 #include <cstddef>
-#include <cstdlib>
 #include <format>
 #include <functional>
 #include <initializer_list>
 #include <limits>
 #include <new>
+#include <numeric>
 #include <span>
 #include <type_traits>
 #include <utility>
@@ -119,7 +116,7 @@ public:
     /// @param other The tensor to move from; left empty.
     Tensor(Tensor &&other) noexcept
         : my_data(std::exchange(other.my_data, nullptr)),
-          my_shape(std::move(other.my_shape))
+          my_shape(std::exchange(other.my_shape, {}))
     {
     }
 
@@ -212,7 +209,7 @@ public:
     std::span<T> values() noexcept { return std::span<T>(my_data, size()); }
     /// @brief Every element, in row-major order, read-only.
     /// @return A read-only view of size() elements starting at data().
-    std::span<const T> values() const
+    std::span<const T> values() const noexcept
     {
         return std::span<const T>(my_data, size());
     }
@@ -277,8 +274,6 @@ private:
     T *my_data = nullptr;
     /// @brief The extent of each dimension; empty for rank 0.
     std::vector<std::size_t> my_shape;
-    /// @brief Unused.
-    std::span<T> my_values;
 
     /// @brief The row-major offset of an element from data().
     /// @tparam I Any integral types.
