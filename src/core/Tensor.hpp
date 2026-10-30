@@ -63,7 +63,7 @@ struct HostAlloc
     ///   #alignment.
     /// @return The block, never null.
     /// @throws std::bad_alloc If the memory cannot be obtained.
-    static void *allocate(std::size_t bytes)  // throws std::bad_alloc
+    static void *allocate(std::size_t bytes)
     {
         return ::operator new(bytes, std::align_val_t(alignment));
     }
@@ -159,7 +159,7 @@ public:
         my_data =
             static_cast<T *>(allocator_type::allocate(size() * sizeof(T)));
 
-        fill(0);
+        fill(T{});
     }
 
     /// @brief Returns the buffer to the allocator policy, if there is one.
@@ -243,7 +243,7 @@ public:
     template <std::integral... I>
     T &at(I... idx)
     {
-        validate_offset(idx...);
+        validate_indices(idx...);
         return my_data[calculate_offset(idx...)];
     }
     /// @brief The element at the given indices, checked and read-only.
@@ -254,7 +254,7 @@ public:
     template <std::integral... I>
     const T &at(I... idx) const
     {
-        validate_offset(idx...);
+        validate_indices(idx...);
         return my_data[calculate_offset(idx...)];
     }
 
@@ -301,7 +301,7 @@ private:
     /// @throws altx::Error If the number of indices differs from rank(), or
     ///   an index is not below its extent.
     template <std::integral... I>
-    void validate_offset(I... idx) const
+    void validate_indices(I... idx) const
     {
         if (empty())
         {
@@ -321,10 +321,10 @@ private:
         {
             if (indices[i] >= my_shape[i])
             {
-                throw Error(
-                    std::format("The required index {} is greater than the "
-                                "size of the tensor {} at index {}",
-                                indices[i], my_shape[i], i));
+                throw Error(std::format(
+                    "The required index {} is greater than or equal to the "
+                    "size of the tensor {} at index {}",
+                    indices[i], my_shape[i], i));
             }
         }
     }
@@ -354,7 +354,7 @@ private:
         }
         if (prod > std::numeric_limits<std::size_t>::max() / sizeof(T))
         {
-            throw Error("Too many byte are requested for the tensor.");
+            throw Error("Too many bytes are requested for the tensor.");
         }
     }
 
