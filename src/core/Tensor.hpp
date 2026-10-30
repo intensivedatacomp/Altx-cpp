@@ -313,6 +313,10 @@ private:
     template <std::integral... I>
     void validate_offset(I... idx) const
     {
+        if (empty())
+        {
+            throw Error("The tensor is empty.");
+        }
         if (sizeof...(I) != rank())
         {
             throw Error(
